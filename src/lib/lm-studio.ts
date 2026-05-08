@@ -63,6 +63,7 @@ export function getLmStudioConfig() {
     temperature: Number(process.env.LM_STUDIO_TEMPERATURE ?? 0.3),
     maxTokens: Number(process.env.LM_STUDIO_MAX_TOKENS ?? 1200),
     requestTimeoutMs: Number(process.env.LM_STUDIO_REQUEST_TIMEOUT_MS ?? 90_000),
+    connectTimeoutMs: Number(process.env.LM_STUDIO_CONNECT_TIMEOUT_MS ?? 5_000),
     apiKey: process.env.LM_STUDIO_API_KEY,
   };
 }
@@ -78,6 +79,30 @@ export function buildSystemPrompt() {
     "If the user asks about procedures, explain them as short steps.",
     "If the user asks about where to go, recommend checking the official university site or the responsible office.",
   ].join(" ");
+}
+
+export async function assertLmStudioReachable() {
+  const config = getLmStudioConfig();
+  const response = await fetch(`${config.openAiBaseUrl}/models`, {
+    headers: {
+      ...(config.apiKey
+        ? {
+            Authorization: `Bearer ${config.apiKey}`,
+          }
+        : {}),
+    },
+    signal: AbortSignal.timeout(
+      Math.min(config.requestTimeoutMs, config.connectTimeoutMs),
+    ),
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+
+    throw new Error(
+      `LM Studio connection check failed (${response.status}): ${details || "No details"}`,
+    );
+  }
 }
 
 interface RequestLmStudioChatOptions {

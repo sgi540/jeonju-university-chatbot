@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { requestLmStudioChat } from "@/lib/lm-studio";
+import {
+  assertLmStudioReachable,
+  getLmStudioConfig,
+  requestLmStudioChat,
+} from "@/lib/lm-studio";
 import {
   buildGroundedPrompt,
   retrieveOfficialContext,
@@ -44,6 +48,34 @@ function buildRetrievalQuery(prompt: string, messages: IncomingMessage[]) {
     .slice(-2);
 
   return recentUserMessages.length ? recentUserMessages.join("\n") : prompt;
+}
+
+function isLmStudioConnectionError(message: string) {
+  return /(fetch failed|timeout|timed out|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|Failed to connect)/iu.test(message);
+}
+
+function formatChatError(error: unknown) {
+  const rawMessage =
+    error instanceof Error
+      ? error.message
+      : "Unknown error while contacting LM Studio.";
+
+  if (!isLmStudioConnectionError(rawMessage)) {
+    return {
+      status: 500,
+      details: rawMessage,
+    };
+  }
+
+  const config = getLmStudioConfig();
+
+  return {
+    status: 503,
+    details: [
+      `LM Studio 서버에 연결하지 못했습니다. 현재 설정된 주소는 ${config.serverBaseUrl} 입니다.`,
+      "LM Studio의 Local Server가 켜져 있는지, 모델과 임베딩 모델이 로드되어 있는지, 같은 네트워크에서 접근 가능한지 확인해 주세요.",
+    ].join(" "),
+  };
 }
 
 export async function POST(request: Request) {
@@ -91,6 +123,8 @@ export async function POST(request: Request) {
       });
     }
 
+    await assertLmStudioReachable();
+
     const officialContext = await retrieveOfficialContext(retrievalQuery);
     const groundedPrompt = buildGroundedPrompt(prompt, officialContext.groundedContext);
 
@@ -109,17 +143,14 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Unknown error while contacting LM Studio.";
+    const { status, details } = formatChatError(error);
 
     return NextResponse.json(
       {
         error: "Unable to complete the chat request.",
-        details: message,
+        details,
       },
-      { status: 500 },
+      { status },
     );
   }
 }
