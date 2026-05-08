@@ -1,6 +1,14 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  CompositionEvent,
+  FormEvent,
+  KeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   assistantName,
   createMessage,
@@ -58,6 +66,9 @@ export function ChatShell() {
     null,
   );
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const isComposingRef = useRef(false);
+  const residualInputGuardRef = useRef<string | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -74,7 +85,7 @@ export function ChatShell() {
     const nextMessages = [...messages, nextUserMessage];
 
     setMessages(nextMessages);
-    setInput("");
+    clearComposerAfterSubmit(trimmedPrompt);
     setError(null);
     setIsLoading(true);
 
@@ -123,8 +134,70 @@ export function ChatShell() {
     void submitPrompt(input);
   }
 
+  function clearComposerAfterSubmit(submittedPrompt: string) {
+    residualInputGuardRef.current = submittedPrompt;
+
+    setInput("");
+
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
+
+    window.setTimeout(() => {
+      if (residualInputGuardRef.current === submittedPrompt) {
+        residualInputGuardRef.current = null;
+      }
+    }, 500);
+  }
+
+  function shouldSuppressResidualInput(nextValue: string) {
+    const submittedPrompt = residualInputGuardRef.current;
+
+    if (!submittedPrompt) {
+      return false;
+    }
+
+    const normalizedValue = nextValue.trim();
+    const normalizedPrompt = submittedPrompt.trim();
+
+    return (
+      !normalizedValue ||
+      (normalizedValue.length <= 2 && normalizedPrompt.endsWith(normalizedValue))
+    );
+  }
+
+  function handleInputChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    const nextValue = event.target.value;
+
+    if (shouldSuppressResidualInput(nextValue)) {
+      event.currentTarget.value = "";
+      setInput("");
+      return;
+    }
+
+    residualInputGuardRef.current = null;
+    setInput(nextValue);
+  }
+
+  function handleCompositionStart() {
+    isComposingRef.current = true;
+  }
+
+  function handleCompositionEnd(event: CompositionEvent<HTMLTextAreaElement>) {
+    isComposingRef.current = false;
+
+    if (shouldSuppressResidualInput(event.currentTarget.value)) {
+      event.currentTarget.value = "";
+      setInput("");
+    }
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
+      if (event.nativeEvent.isComposing || isComposingRef.current) {
+        return;
+      }
+
       event.preventDefault();
       void submitPrompt(input);
     }
@@ -437,8 +510,11 @@ export function ChatShell() {
 
               <div className="rounded-[28px] border border-[var(--line)] bg-white/84 p-3 shadow-[0_22px_60px_rgba(53,36,24,0.08)]">
                 <textarea
+                  ref={inputRef}
                   value={input}
-                  onChange={(event) => setInput(event.target.value)}
+                  onChange={handleInputChange}
+                  onCompositionStart={handleCompositionStart}
+                  onCompositionEnd={handleCompositionEnd}
                   onKeyDown={handleKeyDown}
                   placeholder="예: 수강신청 정정 기간, 증명서 발급 방법, 국제학생 문의처를 알려줘"
                   rows={4}
