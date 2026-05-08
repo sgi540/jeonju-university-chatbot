@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { load } from "cheerio";
 import {
   requestLmStudioEmbeddings,
   type LmStudioRuntimeOverrides,
@@ -12,6 +13,7 @@ const DEFAULT_RETRIEVAL_LIMIT = 5;
 const MIN_SIGNIFICANT_SCORE = 0.2;
 const MIN_RELEVANCE_RATIO = 0.75;
 const CAFETERIA_SOURCE_URL = "https://www.jj.ac.kr/jj/campuslife/food.do";
+const COLLEGES_SOURCE_URL = "https://www.jj.ac.kr/jj/colleges/colleges-Introduction.do";
 const CAMPUS_MAP_SOURCE_URL = "https://www.jj.ac.kr/jj/introduction/campus-map.do";
 const CAMPUS_MAP_DIRECTION_URL = "https://www.jj.ac.kr/jj/introduction/campus-map-info.do";
 const TRANSPORT_SOURCE_URL = "https://www.jj.ac.kr/jj/introduction/location.do";
@@ -19,6 +21,21 @@ const SOUTH_TERMINAL_SOURCE_URL = "https://www.jj.ac.kr/jj/campuslife/southtermi
 const TRANSPORT_CACHE_TTL_MS = 1000 * 60 * 30;
 const CAFETERIA_CACHE_TTL_MS = 1000 * 60 * 5;
 const CAMPUS_PLACE_CACHE_TTL_MS = 1000 * 60 * 30;
+const DEPARTMENT_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+const OFFICIAL_COLLEGE_ORDER = [
+  "인문콘텐츠대학",
+  "사회과학대학",
+  "경영대학",
+  "의과학대학",
+  "공과대학",
+  "소프트웨어융합대학",
+  "문화융합대학",
+  "문화관광대학",
+  "사범대학",
+  "미래융합대학",
+  "수퍼스타칼리지",
+  "반려동물산업학부",
+];
 const GENERIC_QUERY_TOKENS = new Set([
   "같은",
   "내용",
@@ -75,6 +92,7 @@ interface RagChunkRecord {
 
 interface RagDocumentRecord {
   sourceId: string;
+  title?: string;
   url: string;
   excerpt?: string;
 }
@@ -154,6 +172,18 @@ interface TransportationSnapshot {
   } | null;
 }
 
+interface DepartmentCollege {
+  name: string;
+  departments: string[];
+  url?: string | null;
+}
+
+interface DepartmentSnapshot {
+  colleges: DepartmentCollege[];
+  source: "live" | "index";
+  totalDepartments: number;
+}
+
 interface CampusPlace {
   id: number;
   placeName: string;
@@ -176,6 +206,12 @@ let cafeteriaCache:
   | {
       fetchedAt: number;
       data: CafeteriaDayMenu[];
+    }
+  | null = null;
+let departmentCache:
+  | {
+      fetchedAt: number;
+      data: DepartmentSnapshot | null;
     }
   | null = null;
 const campusPlaceCache = new Map<
@@ -341,6 +377,14 @@ export async function tryBuildOfficialShortcutAnswer(
   route?: OfficialQuestionRoute | null,
 ): Promise<RagShortcutAnswer | null> {
   const normalizedQuery = retrievalQuery.trim();
+
+  if (route?.intent === "department_lookup" || (!route && isDepartmentListQuery(normalizedQuery))) {
+    const departmentListAnswer = await buildDepartmentListAnswer(normalizedQuery);
+
+    if (departmentListAnswer) {
+      return departmentListAnswer;
+    }
+  }
 
   if (shouldPreferFoodFacilityLocationLookup(normalizedQuery, route)) {
     const campusPlaceAnswer = await buildCampusPlaceAnswer(
@@ -692,6 +736,20 @@ function isProfessorCountQuery(query: string) {
   return /(교수|교수님|교수진|교원)/u.test(query) && /(몇\s*명|몇명|총합|총원|인원|숫자|수는|수는\s*몇|얼마나)/u.test(query);
 }
 
+function isDepartmentListQuery(query: string) {
+  const normalized = normalizeWhitespace(query);
+
+  if (/(교수|교수님|교수진|교원|연구실|전화|이메일)/u.test(normalized)) {
+    return false;
+  }
+
+  return (
+    /(학과|학부|전공|단과대|대학)/u.test(normalized) &&
+    /(전부|전체|모두|목록|리스트|종류|뭐가|뭐야|무슨|어떤|알려|정리|안내|있어|있나요)/u.test(normalized) &&
+    /(전주대|전주대학교|학교|대학)/u.test(normalized)
+  );
+}
+
 function isCampusPlaceQuery(query: string) {
   const normalized = normalizeWhitespace(query);
 
@@ -895,6 +953,240 @@ function matchCafeteriaMealLine(line: string) {
 
 function matchCafeteriaHoursLine(line?: string) {
   return line?.match(/^\(운영시간: ([^)]+)\)$/u)?.[1] ?? null;
+}
+
+async function buildDepartmentListAnswer(
+  retrievalQuery: string,
+): Promise<RagShortcutAnswer | null> {
+  const snapshot = await loadDepartmentSnapshot();
+
+  if (!snapshot?.colleges.length) {
+    return null;
+  }
+
+  const index = await loadRagIndex();
+  const collegeLines = snapshot.colleges.map((college) => (
+    `- ${college.name} (${college.departments.length}개): ${college.departments.join(", ")}`
+  ));
+  const sourceLabel = snapshot.source === "live"
+    ? "공식 대학안내 페이지"
+    : "구축된 공식문서 인덱스";
+
+  return {
+    message: [
+      `전주대학교 ${sourceLabel} 기준, 학부 대학의 학과/학부는 ${snapshot.colleges.length}개 단위에 총 ${snapshot.totalDepartments}개가 확인됩니다.`,
+      "대학원 과정은 제외한 대학/학부 기준입니다.",
+      ...collegeLines,
+      "세부 소개와 최신 개편 여부는 전주대학교 공식 대학안내 페이지에서 확인해 주세요.",
+    ].join("\n"),
+    sources: [
+      {
+        title: "대학안내",
+        category: "학과",
+        url: COLLEGES_SOURCE_URL,
+        excerpt: `${snapshot.colleges.length}개 대학/학부, 총 ${snapshot.totalDepartments}개 학과/학부 목록`,
+        score: 1,
+      },
+      ...snapshot.colleges.slice(0, 4).map((college) => ({
+        title: college.name,
+        category: "학과",
+        url: college.url ?? COLLEGES_SOURCE_URL,
+        excerpt: `${college.departments.length}개: ${college.departments.join(", ")}`,
+        score: 0.98,
+      })),
+    ],
+    retrievalQuery,
+    indexSummary: index
+      ? {
+          generatedAt: index.generatedAt,
+          documentCount: index.documentCount,
+          chunkCount: index.chunkCount,
+        }
+      : null,
+  };
+}
+
+async function loadDepartmentSnapshot() {
+  if (
+    departmentCache &&
+    Date.now() - departmentCache.fetchedAt < DEPARTMENT_CACHE_TTL_MS
+  ) {
+    return departmentCache.data;
+  }
+
+  const liveSnapshot = await fetchDepartmentSnapshot().catch(() => null);
+  const indexSnapshot = liveSnapshot?.colleges.length
+    ? null
+    : await buildDepartmentSnapshotFromIndex();
+  const data = liveSnapshot?.colleges.length ? liveSnapshot : indexSnapshot;
+
+  departmentCache = {
+    fetchedAt: Date.now(),
+    data,
+  };
+
+  return data;
+}
+
+async function fetchDepartmentSnapshot(): Promise<DepartmentSnapshot | null> {
+  const response = await fetch(COLLEGES_SOURCE_URL, {
+    headers: {
+      "user-agent": "JJ-Campus-Copilot/1.0",
+    },
+    signal: AbortSignal.timeout(7000),
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const html = await response.text();
+  const $ = load(html);
+  const colleges: DepartmentCollege[] = [];
+
+  $(".colleges-con").each((_, element) => {
+    const name = normalizeWhitespace(
+      $(element).find(".college-title-box h4").first().text(),
+    );
+    const url = normalizeOptionalUrl(
+      $(element).find(".college-title-box a.btn-link").first().attr("href"),
+      COLLEGES_SOURCE_URL,
+    );
+    const departments = dedupeStrings(
+      $(element).find(".college-list-box a").toArray()
+        .map((anchor) => normalizeWhitespace($(anchor).find("span").last().text()))
+        .filter(Boolean),
+    );
+
+    if (name && departments.length) {
+      colleges.push({
+        name,
+        departments,
+        url,
+      });
+    }
+  });
+
+  return buildDepartmentSnapshot(colleges, "live");
+}
+
+async function buildDepartmentSnapshotFromIndex(): Promise<DepartmentSnapshot | null> {
+  const index = await loadRagIndex();
+
+  if (!index) {
+    return null;
+  }
+
+  const collegeMap = new Map<string, Set<string>>();
+  const titles = dedupeStrings([
+    ...((index.documents ?? []).map((document) => document.title ?? "")),
+    ...index.chunks.map((chunk) => chunk.title),
+  ]);
+
+  for (const title of titles) {
+    const parsed = parseDepartmentTitle(title);
+
+    if (!parsed) {
+      continue;
+    }
+
+    const departments = collegeMap.get(parsed.college) ?? new Set<string>();
+
+    departments.add(parsed.department);
+    collegeMap.set(parsed.college, departments);
+  }
+
+  const colleges = [...collegeMap.entries()].map(([name, departments]) => ({
+    name,
+    departments: [...departments],
+    url: COLLEGES_SOURCE_URL,
+  }));
+
+  return buildDepartmentSnapshot(colleges, "index");
+}
+
+function parseDepartmentTitle(title: string) {
+  const parts = title
+    .split("|")
+    .map((part) => normalizeWhitespace(part))
+    .filter(Boolean);
+
+  if (parts.length < 5 || parts[3] !== "대학") {
+    return null;
+  }
+
+  const [section, department, college] = parts;
+
+  if (!/^(학과소개|교수소개(?:\s*게시판목록)?)$/u.test(section)) {
+    return null;
+  }
+
+  if (!isDepartmentName(department) || !college) {
+    return null;
+  }
+
+  return {
+    college,
+    department,
+  };
+}
+
+function buildDepartmentSnapshot(
+  colleges: DepartmentCollege[],
+  source: DepartmentSnapshot["source"],
+): DepartmentSnapshot | null {
+  const normalizedColleges = colleges
+    .map((college) => ({
+      ...college,
+      departments: dedupeStrings(college.departments.filter(isDepartmentName)),
+    }))
+    .filter((college) => college.name && college.departments.length)
+    .sort((left, right) => (
+      getCollegeOrder(left.name) - getCollegeOrder(right.name) ||
+      left.name.localeCompare(right.name, "ko")
+    ));
+
+  if (!normalizedColleges.length) {
+    return null;
+  }
+
+  return {
+    colleges: normalizedColleges,
+    source,
+    totalDepartments: normalizedColleges.reduce(
+      (total, college) => total + college.departments.length,
+      0,
+    ),
+  };
+}
+
+function isDepartmentName(value: string) {
+  return (
+    /(?:학과|학부|전공|교육과)(?:\(|$)/u.test(value) &&
+    !/(교수|교수소개|게시판|대학안내|홈페이지|커리어로드맵|자세히보기)/u.test(value)
+  );
+}
+
+function getCollegeOrder(name: string) {
+  const index = OFFICIAL_COLLEGE_ORDER.indexOf(name);
+
+  return index >= 0 ? index : OFFICIAL_COLLEGE_ORDER.length;
+}
+
+function normalizeOptionalUrl(value: string | null | undefined, baseUrl: string) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return new URL(value, baseUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+function dedupeStrings(values: string[]) {
+  return [...new Set(values.map(normalizeWhitespace).filter(Boolean))];
 }
 
 function buildProfessorCountAnswer(

@@ -6,6 +6,7 @@ import {
 export type OfficialQuestionIntent =
   | "campus_place_lookup"
   | "cafeteria_lookup"
+  | "department_lookup"
   | "transport_lookup"
   | "professor_lookup"
   | "official_rag"
@@ -22,6 +23,7 @@ export interface OfficialQuestionRoute {
 const VALID_INTENTS = new Set<OfficialQuestionIntent>([
   "campus_place_lookup",
   "cafeteria_lookup",
+  "department_lookup",
   "transport_lookup",
   "professor_lookup",
   "official_rag",
@@ -49,14 +51,15 @@ function buildRouterSystemPrompt() {
     "You classify Korean Jeonju University chatbot questions.",
     "Return only one valid JSON object. Do not use markdown.",
     "Never answer the user question.",
-    "Allowed intent values: campus_place_lookup, cafeteria_lookup, transport_lookup, professor_lookup, official_rag, unknown.",
+    "Allowed intent values: campus_place_lookup, cafeteria_lookup, department_lookup, transport_lookup, professor_lookup, official_rag, unknown.",
     "Use campus_place_lookup for campus map facilities, buildings, rooms, stops, welfare spaces, or existence/location questions about places.",
     "If the user asks where a cafeteria, restaurant, cafe, convenience store, or food facility is, use campus_place_lookup, not cafeteria_lookup.",
     "Use cafeteria_lookup only for cafeteria menus, meal contents, 학식 메뉴, 식단, 조식, 중식, 석식.",
+    "Use department_lookup for lists of colleges, departments, majors, 학과, 학부, 전공, or all undergraduate academic units.",
     "Use transport_lookup for address, getting to campus, public transit, terminal, station, taxi, shuttle/bus access.",
-    "Use professor_lookup for professors, faculty lists, professor phone numbers, departments, and faculty counts.",
+    "Use professor_lookup for professors, faculty lists, professor phone numbers, and faculty counts.",
     "Use official_rag for policies, scholarships, certificates, academic affairs, portal, library, and general official information.",
-    "For searchQuery, extract only the core lookup target. Examples: '학교 안에 변전 시설 있나?' -> '변전소'; '초막 교회 위치' -> '초막교회'; '학교에 식당은 어디에 있어?' -> '식당'; '오늘 점심 학식' -> null; '전주역에서 가는 법' -> null.",
+    "For searchQuery, extract only the core lookup target. Examples: '학교 안에 변전 시설 있나?' -> '변전소'; '초막 교회 위치' -> '초막교회'; '학교에 식당은 어디에 있어?' -> '식당'; '전주대학교 학과 전부 알려줘' -> null; '오늘 점심 학식' -> null; '전주역에서 가는 법' -> null.",
     "For date, use YYYY-MM-DD when explicit or relative. Current date is 2026-05-08 in Asia/Seoul. Otherwise null.",
     "For meal, use one of 조식, 중식, 석식, or null.",
     "confidence must be a number from 0 to 1.",
