@@ -1,0 +1,205 @@
+{
+  "siteName": "Jeonju University Official Sources",
+  "sources": [
+    {
+      "id": "academic-schedule",
+      "title": "학사일정",
+      "category": "학사",
+      "url": "https://www.jj.ac.kr/jj/campuslife/schedule.do?mode=list&article.offset=0&articleLimit=10",
+      "keywords": ["학사일정", "수강신청", "개강", "종강", "휴학", "복학", "졸업", "시험"],
+      "discoverChildren": true,
+      "maxChildren": 12
+    },
+    {
+      "id": "academic-system",
+      "title": "학사제도",
+      "category": "학사",
+      "url": "https://www.jj.ac.kr/jj/campuslife/haksasystem.do",
+      "keywords": ["학사제도", "수강", "성적", "휴학", "복학", "졸업", "학점"],
+      "discoverChildren": true,
+      "maxChildren": 8
+    },
+    {
+      "id": "academic-forms",
+      "title": "학사서식",
+      "category": "학사",
+      "url": "https://www.jj.ac.kr/jj/campuslife/haksapds.do",
+      "keywords": ["학사서식", "수강편람", "교육과정편람", "편람", "서식", "자료실"],
+      "discoverChildren": true,
+      "maxChildren": 10
+    },
+    {
+      "id": "scholarship",
+      "title": "장학금",
+      "category": "장학",
+      "url": "https://www.jj.ac.kr/jj/campuslife/scholarship01.do",
+      "keywords": ["장학", "장학금", "교내장학", "교외장학", "신입생장학", "성적장학"],
+      "discoverChildren": true,
+      "maxChildren": 12
+    },
+    {
+      "id": "student-loan",
+      "title": "학자금대출",
+      "category": "장학",
+      "url": "https://www.jj.ac.kr/jj/campuslife/loan01.do",
+      "keywords": ["학자금대출", "대출", "학자금", "국가장학", "한국장학재단"],
+      "discoverChildren": true,
+      "maxChildren": 10
+    },
+    {
+      "id": "registration",
+      "title": "등록",
+      "category": "행정",
+      "url": "https://www.jj.ac.kr/jj/campuslife/registration01.do",
+      "keywords": ["등록", "등록금", "납부", "분납", "고지서", "교육비납입"],
+      "discoverChildren": true,
+      "maxChildren": 10
+    },
+    {
+      "id": "certificate",
+      "title": "증명서 발급",
+      "category": "행정",
+      "url": "https://www.jj.ac.kr/jj/campuslife/certificate-issuance.do",
+      "keywords": ["증명서", "증명서발급", "재학증명서", "성적증명서", "졸업증명서", "인터넷증명"],
+      "discoverChildren": false,
+      "maxChildren": 0
+    },
+    {
+      "id": "portal",
+      "title": "포털서비스",
+      "category": "스마트JJ",
+      "url": "https://www.jj.ac.kr/jj/smartjj/portal.do",
+      "keywords": ["포털", "포털서비스", "웹포털", "통합정보", "로그인"],
+      "discoverChildren": false,
+      "maxChildren": 0
+    },
+    {
+      "id": "pc-helper",
+      "title": "PC 헬퍼",
+      "category": "스마트JJ",
+      "url": "https://www.jj.ac.kr/jj/smartjj/pchelper01.do",
+      "keywords": ["PC헬퍼", "PC", "컴퓨터", "프로그램", "설치", "원격지원"],
+      "discoverChildren": true,
+      "maxChildren": 8
+    },
+    {
+      "id": "it-services",
+      "title": "IT 서비스",
+      "category": "스마트JJ",
+      "url": "https://www.jj.ac.kr/jj/smartjj/service02.do",
+      "keywords": ["IT", "IT서비스", "와이파이", "wifi", "계정", "네트워크", "메일"],
+      "discoverChildren": false,
+      "maxChildren": 0
+    },
+    {
+      "id": "dormitory",
+      "title": "생활관",
+      "category": "생활",
+      "url": "https://www.jj.ac.kr/jj/campuslife/dormitory-info.do",
+      "keywords": ["생활관", "기숙사", "입사", "퇴사", "호실", "학생생활관"],
+      "discoverChildren": true,
+      "maxChildren": 8
+    },
+    {
+      "id": "bus",
+      "title": "통학버스",
+      "category": "생활",
+      "url": "https://www.jj.ac.kr/jj/campuslife/bus01.do",
+      "keywords": ["통학버스", "셔틀", "셔틀버스", "버스", "교통", "승차"],
+      "discoverChildren": true,
+      "maxChildren": 8
+    },
+    {
+      "id": "getting-here",
+      "title": "오시는길",
+      "category": "교통",
+      "url": "https://www.jj.ac.kr/jj/introduction/location.do",
+      "keywords": [
+        "오시는길",
+        "학교 오는 방법",
+        "전주대학교 주소",
+        "대중교통",
+        "전주역",
+        "버스터미널",
+        "고속버스",
+        "직행버스",
+        "택시",
+        "시내버스",
+        "교통편"
+      ],
+      "discoverChildren": true,
+      "maxChildren": 8
+    },
+    {
+      "id": "campus-map",
+      "title": "캠퍼스맵",
+      "category": "교통",
+      "url": "https://www.jj.ac.kr/jj/introduction/campus-map.do",
+      "keywords": [
+        "캠퍼스맵",
+        "버스정류장",
+        "정문",
+        "주차",
+        "건물 위치",
+        "캠퍼스 지도"
+      ],
+      "discoverChildren": false,
+      "maxChildren": 0
+    },
+    {
+      "id": "cafeteria",
+      "title": "식당안내",
+      "category": "생활",
+      "url": "https://www.jj.ac.kr/jj/campuslife/food.do",
+      "keywords": ["식당", "학식", "식단", "학생식당", "메뉴"],
+      "discoverChildren": true,
+      "maxChildren": 8
+    },
+    {
+      "id": "health",
+      "title": "보건진료소",
+      "category": "생활",
+      "url": "https://www.jj.ac.kr/jj/campuslife/health.do",
+      "keywords": ["보건진료소", "보건", "건강", "진료", "상담", "의무실"],
+      "discoverChildren": true,
+      "maxChildren": 8
+    },
+    {
+      "id": "library",
+      "title": "도서관",
+      "category": "도서관",
+      "url": "https://lib.jj.ac.kr",
+      "keywords": ["도서관", "열람실", "도서대출", "반납", "전자자료", "희망도서"],
+      "discoverChildren": true,
+      "maxChildren": 8
+    },
+    {
+      "id": "cyber-campus",
+      "title": "사이버캠퍼스",
+      "category": "수업",
+      "url": "https://cyber.jj.ac.kr",
+      "keywords": ["사이버캠퍼스", "LMS", "이러닝", "온라인수업", "강의"],
+      "discoverChildren": false,
+      "maxChildren": 0
+    },
+    {
+      "id": "international",
+      "title": "국제교류",
+      "category": "국제",
+      "url": "https://oia.jj.ac.kr",
+      "keywords": ["국제교류", "교환학생", "유학생", "국제학생", "비자", "어학연수"],
+      "discoverChildren": true,
+      "maxChildren": 8
+    },
+    {
+      "id": "faculty-directory",
+      "title": "학과별 교수소개",
+      "category": "교수",
+      "url": "https://www.jj.ac.kr/jj/colleges/colleges-Introduction.do",
+      "keywords": ["교수", "교수소개", "교수진", "교수명단", "학과교수", "교수전화", "연구실", "이메일"],
+      "discoverChildren": true,
+      "maxChildren": 1000,
+      "maxDepth": 3
+    }
+  ]
+}

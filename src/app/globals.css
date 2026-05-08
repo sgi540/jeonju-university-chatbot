@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f4ecdf;
+  --foreground: #1a1714;
+  --surface: rgba(255, 251, 246, 0.82);
+  --surface-strong: rgba(255, 251, 246, 0.94);
+  --line: rgba(72, 46, 31, 0.16);
+  --line-strong: rgba(72, 46, 31, 0.28);
+  --muted: #6d6257;
+  --primary: #6b1f1f;
+  --primary-strong: #401011;
+  --accent: #cd9a32;
+  --teal: #1f5b59;
+  --glow: rgba(205, 154, 50, 0.2);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-display);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background:
+    radial-gradient(circle at top left, rgba(205, 154, 50, 0.24), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(31, 91, 89, 0.18), transparent 28%),
+    linear-gradient(180deg, #f7f0e5 0%, #f3eadf 46%, #efe4d6 100%);
+  color: var(--foreground);
+}
+
+body {
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 32%),
+    linear-gradient(130deg, rgba(107, 31, 31, 0.04), rgba(31, 91, 89, 0.02)),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body), sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(107, 31, 31, 0.16);
+}
+
+.glass-panel {
+  background: var(--surface);
+  backdrop-filter: blur(22px);
+  border: 1px solid var(--line);
+  box-shadow:
+    0 30px 90px rgba(49, 34, 22, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.section-title {
+  font-family: var(--font-display), sans-serif;
+  letter-spacing: -0.04em;
+}
+
+.subtle-scrollbar::-webkit-scrollbar {
+  width: 10px;
+}
+
+.subtle-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(72, 46, 31, 0.18);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.subtle-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
