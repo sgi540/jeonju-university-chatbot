@@ -158,6 +158,8 @@ interface CampusPlace {
   latitude: number | null;
   longitude: number | null;
   placeType: "BUILDING" | "WELFARE" | "BUS";
+  useYn?: string | null;
+  welfareCategory?: string | null;
   description?: string | null;
 }
 
@@ -334,6 +336,17 @@ export async function tryBuildOfficialShortcutAnswer(
   route?: OfficialQuestionRoute | null,
 ): Promise<RagShortcutAnswer | null> {
   const normalizedQuery = retrievalQuery.trim();
+
+  if (shouldPreferFoodFacilityLocationLookup(normalizedQuery, route)) {
+    const campusPlaceAnswer = await buildCampusPlaceAnswer(
+      normalizedQuery,
+      route?.searchQuery ?? undefined,
+    );
+
+    if (campusPlaceAnswer) {
+      return campusPlaceAnswer;
+    }
+  }
 
   if (route?.intent === "campus_place_lookup") {
     const campusPlaceAnswer = await buildCampusPlaceAnswer(
@@ -955,16 +968,30 @@ async function buildCampusPlaceAnswer(
   }
 
   const places = await loadCampusPlaces(searchKeyword);
-  const exactPlace =
-    places.find((place) => normalizeCampusPlaceName(place.placeName) === normalizeCampusPlaceName(searchKeyword)) ??
-    places.find((place) => normalizeCampusPlaceName(place.placeName).includes(normalizeCampusPlaceName(searchKeyword))) ??
-    places[0];
+  const exactPlace = findBestCampusPlace(places, searchKeyword);
 
   if (!exactPlace) {
     return null;
   }
 
   const index = await loadRagIndex();
+  const normalizedSearchKeyword = normalizeCampusPlaceName(searchKeyword);
+  const matchingPlaces = places.filter((place) => (
+    normalizeCampusPlaceName(place.placeName).includes(normalizedSearchKeyword)
+  ));
+  const listedPlaces = shouldListCampusPlaceMatches(searchKeyword, matchingPlaces)
+    ? matchingPlaces.slice(0, 5)
+    : [];
+
+  if (listedPlaces.length > 1) {
+    return buildCampusPlaceListAnswer({
+      retrievalQuery,
+      searchKeyword,
+      places: listedPlaces,
+      index,
+    });
+  }
+
   const directionUrl = buildCampusDirectionUrl(exactPlace);
   const coordinateLine =
     exactPlace.latitude && exactPlace.longitude
@@ -1212,7 +1239,9 @@ async function loadCampusPlaces(searchKeyword: string) {
     const results = await Promise.all(
       placeTypes.map((placeType) => fetchCampusPlaces(keyword, placeType)),
     );
-    const data = dedupeCampusPlaces(results.flat());
+    const deduped = dedupeCampusPlaces(results.flat());
+    const activePlaces = deduped.filter((place) => place.useYn !== "N");
+    const data = activePlaces.length ? activePlaces : deduped;
 
     if (data.length) {
       campusPlaceCache.set(cacheKey, {
@@ -1423,21 +1452,160 @@ function buildCampusSearchKeywords(searchKeyword: string) {
     candidates.push("변전소", "변전");
   }
 
+  if (/(식당|음식점|푸드코트|학생식당)/u.test(normalized)) {
+    if (/학생회관/u.test(normalized)) {
+      candidates.push("학생회관");
+    }
+
+    if (/스타타워/u.test(normalized)) {
+      candidates.push("스타타워");
+    }
+
+    if (/스타빌/u.test(normalized)) {
+      candidates.push("스타빌");
+    }
+
+    if (/체육부/u.test(normalized)) {
+      candidates.push("체육부");
+    }
+
+    candidates.push("식당");
+  }
+
   return [...new Set(candidates.filter((candidate) => candidate.length >= 2))];
 }
 
 function extractCampusPlaceKeyword(query: string) {
   const normalized = normalizeWhitespace(query)
-    .replace(/전주대학교|전주대|학교\s*안에?|학교안에?|학교\s*내|학교내|교내|캠퍼스\s*안에?|캠퍼스안에?|캠퍼스\s*내|캠퍼스내|캠퍼스맵|캠퍼스|학교|안에|안쪽|내부|건물리스트|건물번호|건물|공식|기준/gu, " ")
+    .replace(/전주대학교(?:에서|에는|에|의)?|전주대(?:에서|에는|에|의)?|학교\s*안에?|학교안에?|학교\s*내|학교내|학교(?:에서|에는|에|의)?|교내(?:에서|에는|에|의)?|캠퍼스\s*안에?|캠퍼스안에?|캠퍼스\s*내|캠퍼스내|캠퍼스맵|캠퍼스(?:에서|에는|에|의)?|안에|안쪽|내부|건물리스트|건물번호|건물|공식|기준/gu, " ")
     .replace(/위치|어디|어딘지|어디야|어디에|있어|있나요|있니|몇\s*번|몇번|번호/gu, " ")
     .replace(/알려줘|알려주|찾아줘|찾아주|확인해줘|보여줘|가려면|가는\s*법|길찾기|이야|인가요|인가|이니|이냐/gu, " ")
     .replace(/[?!.]/g, " ");
 
   const compactKeyword = normalizeWhitespace(normalized)
     .replace(/\s+/g, "")
+    .replace(/^(?:으로부터|에게서|에서|으로|에게|한테|부터|까지|처럼|보다|의|를|을|은|는|이|가|에|로|도|만)+/u, "")
     .replace(/(?:으로부터|에게서|에서|으로|에게|한테|부터|까지|처럼|보다|의|를|을|은|는|이|가|에|로|도|만)+$/u, "");
 
   return compactKeyword.length >= 2 ? compactKeyword : "";
+}
+
+function shouldPreferFoodFacilityLocationLookup(
+  query: string,
+  route?: OfficialQuestionRoute | null,
+) {
+  if (route?.intent !== "cafeteria_lookup") {
+    return false;
+  }
+
+  return (
+    /(식당|음식점|푸드코트|카페|편의점|매점|학생식당)/u.test(query) &&
+    isCampusPlaceQuery(query) &&
+    !isCafeteriaMenuContentQuestion(query)
+  );
+}
+
+function isCafeteriaMenuContentQuestion(query: string) {
+  return (
+    /(식단|메뉴|조식|중식|석식)/u.test(query) ||
+    /(오늘|내일|이번\s*주|월요일|화요일|수요일|목요일|금요일|토요일|일요일|\d{1,2}\s*월|\d{1,2}\s*일)/u.test(query) &&
+      /(학식|밥|점심|저녁|아침|뭐|나와|알려)/u.test(query)
+  );
+}
+
+function shouldListCampusPlaceMatches(searchKeyword: string, places: CampusPlace[]) {
+  const normalized = normalizeCampusPlaceName(searchKeyword);
+
+  return /^(식당|음식점|푸드코트|카페|편의점|매점)$/u.test(normalized) && places.length > 1;
+}
+
+function findBestCampusPlace(places: CampusPlace[], searchKeyword: string) {
+  const normalizedSearchKeyword = normalizeCampusPlaceName(searchKeyword);
+  const matchTokens = buildCampusPlaceMatchTokens(searchKeyword);
+
+  return (
+    places.find((place) => normalizeCampusPlaceName(place.placeName) === normalizedSearchKeyword) ??
+    places.find((place) => {
+      const normalizedPlaceName = normalizeCampusPlaceName(place.placeName);
+
+      return matchTokens.length > 1 &&
+        matchTokens.every((token) => normalizedPlaceName.includes(token));
+    }) ??
+    places.find((place) => normalizeCampusPlaceName(place.placeName).includes(normalizedSearchKeyword)) ??
+    places[0]
+  );
+}
+
+function buildCampusPlaceMatchTokens(searchKeyword: string) {
+  const normalized = normalizeCampusPlaceName(searchKeyword);
+  const knownTokens = [
+    "학생회관",
+    "스타타워",
+    "스타빌",
+    "체육부",
+    "식당",
+    "카페",
+    "편의점",
+    "매점",
+    "초막교회",
+    "변전소",
+  ];
+
+  return knownTokens.filter((token) => normalized.includes(token));
+}
+
+function buildCampusPlaceListAnswer({
+  retrievalQuery,
+  searchKeyword,
+  places,
+  index,
+}: {
+  retrievalQuery: string;
+  searchKeyword: string;
+  places: CampusPlace[];
+  index: RagIndexFile | null;
+}): RagShortcutAnswer {
+  const placeLines = places.map((place) => (
+    `- ${place.placeName}: ${formatCampusPlaceType(place.placeType)} ${place.orderNo}번${formatCampusCoordinateLine(place)}`
+  ));
+
+  return {
+    message: [
+      `전주대학교 공식 캠퍼스맵 기준으로 ${searchKeyword} 위치는 ${places.length}곳이 확인됩니다.`,
+      ...placeLines,
+      "정확한 위치는 전주대학교 캠퍼스맵 또는 각 장소의 길찾기 화면에서 확인해 주세요.",
+    ].join("\n"),
+    sources: [
+      {
+        title: "캠퍼스맵",
+        category: "캠퍼스안내",
+        url: CAMPUS_MAP_SOURCE_URL,
+        excerpt: `${searchKeyword} 위치 ${places.length}곳: ${places.map((place) => place.placeName).join(", ")}`,
+        score: 1,
+      },
+      ...places.slice(0, 4).map((place) => ({
+        title: place.placeName,
+        category: "캠퍼스안내",
+        url: buildCampusDirectionUrl(place),
+        excerpt: `${place.placeName}: ${formatCampusPlaceType(place.placeType)} ${place.orderNo}번${formatCampusCoordinateLine(place)}`,
+        score: 0.98,
+      })),
+    ],
+    retrievalQuery,
+    indexSummary: index
+      ? {
+          generatedAt: index.generatedAt,
+          documentCount: index.documentCount,
+          chunkCount: index.chunkCount,
+        }
+      : null,
+  };
+}
+
+function formatCampusCoordinateLine(place: CampusPlace) {
+  return place.latitude && place.longitude
+    ? `, 좌표 ${place.latitude}, ${place.longitude}`
+    : "";
 }
 
 function withTopicParticle(value: string) {
