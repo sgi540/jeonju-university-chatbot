@@ -8,10 +8,13 @@ const DEFAULT_RETRIEVAL_LIMIT = 5;
 const MIN_SIGNIFICANT_SCORE = 0.2;
 const MIN_RELEVANCE_RATIO = 0.75;
 const CAFETERIA_SOURCE_URL = "https://www.jj.ac.kr/jj/campuslife/food.do";
+const CAMPUS_MAP_SOURCE_URL = "https://www.jj.ac.kr/jj/introduction/campus-map.do";
+const CAMPUS_MAP_DIRECTION_URL = "https://www.jj.ac.kr/jj/introduction/campus-map-info.do";
 const TRANSPORT_SOURCE_URL = "https://www.jj.ac.kr/jj/introduction/location.do";
 const SOUTH_TERMINAL_SOURCE_URL = "https://www.jj.ac.kr/jj/campuslife/southterminal-bus.do";
 const TRANSPORT_CACHE_TTL_MS = 1000 * 60 * 30;
 const CAFETERIA_CACHE_TTL_MS = 1000 * 60 * 5;
+const CAMPUS_PLACE_CACHE_TTL_MS = 1000 * 60 * 30;
 const GENERIC_QUERY_TOKENS = new Set([
   "같은",
   "내용",
@@ -147,6 +150,16 @@ interface TransportationSnapshot {
   } | null;
 }
 
+interface CampusPlace {
+  id: number;
+  placeName: string;
+  orderNo: number;
+  latitude: number | null;
+  longitude: number | null;
+  placeType: "BUILDING" | "WELFARE" | "BUS";
+  description?: string | null;
+}
+
 let transportCache:
   | {
       fetchedAt: number;
@@ -159,6 +172,13 @@ let cafeteriaCache:
       data: CafeteriaDayMenu[];
     }
   | null = null;
+const campusPlaceCache = new Map<
+  string,
+  {
+    fetchedAt: number;
+    data: CampusPlace[];
+  }
+>();
 
 export async function retrieveOfficialContext(
   retrievalQuery: string,
@@ -312,6 +332,14 @@ export async function tryBuildOfficialShortcutAnswer(
   retrievalQuery: string,
 ): Promise<RagShortcutAnswer | null> {
   const normalizedQuery = retrievalQuery.trim();
+
+  if (isCampusPlaceQuery(normalizedQuery)) {
+    const campusPlaceAnswer = await buildCampusPlaceAnswer(normalizedQuery);
+
+    if (campusPlaceAnswer) {
+      return campusPlaceAnswer;
+    }
+  }
 
   if (isTransportationAccessQuery(normalizedQuery)) {
     const transportationAnswer = await buildTransportationAnswer(normalizedQuery);
@@ -624,6 +652,16 @@ function isProfessorCountQuery(query: string) {
   return /(교수|교수님|교수진|교원)/u.test(query) && /(몇\s*명|몇명|총합|총원|인원|숫자|수는|수는\s*몇|얼마나)/u.test(query);
 }
 
+function isCampusPlaceQuery(query: string) {
+  const normalized = normalizeWhitespace(query);
+
+  if (/(주소|전주역|버스터미널|고속버스|직행버스|남부터미널|택시|시내버스|통학버스|셔틀)/u.test(normalized)) {
+    return false;
+  }
+
+  return /(위치|어디|건물|몇\s*번|캠퍼스맵|길찾기)/u.test(normalized);
+}
+
 function isTransportationAccessQuery(query: string) {
   const normalized = normalizeWhitespace(query);
 
@@ -884,6 +922,71 @@ function buildProfessorCountAnswer(
   };
 }
 
+async function buildCampusPlaceAnswer(
+  retrievalQuery: string,
+): Promise<RagShortcutAnswer | null> {
+  const searchKeyword = extractCampusPlaceKeyword(retrievalQuery);
+
+  if (!searchKeyword) {
+    return null;
+  }
+
+  const places = await loadCampusPlaces(searchKeyword);
+  const exactPlace =
+    places.find((place) => normalizeCampusPlaceName(place.placeName) === normalizeCampusPlaceName(searchKeyword)) ??
+    places.find((place) => normalizeCampusPlaceName(place.placeName).includes(normalizeCampusPlaceName(searchKeyword))) ??
+    places[0];
+
+  if (!exactPlace) {
+    return null;
+  }
+
+  const index = await loadRagIndex();
+  const directionUrl = buildCampusDirectionUrl(exactPlace);
+  const coordinateLine =
+    exactPlace.latitude && exactPlace.longitude
+      ? `좌표는 ${exactPlace.latitude}, ${exactPlace.longitude}로 등록되어 있습니다.`
+      : null;
+  const descriptionLine = exactPlace.description
+    ? `캠퍼스맵 설명: ${normalizeWhitespace(exactPlace.description)}`
+    : "다만 공식 캠퍼스맵에는 별도 상세 설명은 등록되어 있지 않습니다.";
+
+  return {
+    message: [
+      `전주대학교 공식 캠퍼스맵 기준으로 ${withTopicParticle(exactPlace.placeName)} ${formatCampusPlaceType(exactPlace.placeType)} ${exactPlace.orderNo}번으로 등록되어 있습니다.`,
+      coordinateLine,
+      descriptionLine,
+      `정확한 위치는 전주대학교 캠퍼스맵 또는 길찾기 화면에서 확인해 주세요.`,
+    ].filter(isPresent).join("\n"),
+    sources: [
+      {
+        title: "캠퍼스맵",
+        category: "캠퍼스안내",
+        url: CAMPUS_MAP_SOURCE_URL,
+        excerpt: `${exactPlace.placeName}: ${formatCampusPlaceType(exactPlace.placeType)} ${exactPlace.orderNo}번`,
+        score: 1,
+      },
+      {
+        title: "캠퍼스맵 길찾기",
+        category: "캠퍼스안내",
+        url: directionUrl,
+        excerpt: exactPlace.latitude && exactPlace.longitude
+          ? `${exactPlace.placeName} 좌표: ${exactPlace.latitude}, ${exactPlace.longitude}`
+          : `${exactPlace.placeName} 길찾기 화면`,
+        score: 0.98,
+      },
+    ],
+    retrievalQuery,
+    indexSummary: index
+      ? {
+          generatedAt: index.generatedAt,
+          documentCount: index.documentCount,
+          chunkCount: index.chunkCount,
+        }
+      : null,
+  };
+}
+
 async function buildTransportationAnswer(
   retrievalQuery: string,
 ): Promise<RagShortcutAnswer | null> {
@@ -1058,6 +1161,58 @@ async function loadLiveCafeteriaMenus() {
   return data;
 }
 
+async function loadCampusPlaces(searchKeyword: string) {
+  const normalizedKeyword = normalizeCampusPlaceName(searchKeyword);
+  const cached = campusPlaceCache.get(normalizedKeyword);
+
+  if (
+    cached &&
+    Date.now() - cached.fetchedAt < CAMPUS_PLACE_CACHE_TTL_MS
+  ) {
+    return cached.data;
+  }
+
+  const placeTypes: CampusPlace["placeType"][] = ["BUILDING", "WELFARE", "BUS"];
+  const results = await Promise.all(
+    placeTypes.map((placeType) => fetchCampusPlaces(searchKeyword, placeType)),
+  );
+  const data = dedupeCampusPlaces(results.flat());
+
+  campusPlaceCache.set(normalizedKeyword, {
+    fetchedAt: Date.now(),
+    data,
+  });
+
+  return data;
+}
+
+async function fetchCampusPlaces(
+  searchKeyword: string,
+  placeType: CampusPlace["placeType"],
+) {
+  const url = new URL(CAMPUS_MAP_SOURCE_URL);
+
+  url.searchParams.set("mode", "getPlaceList");
+  url.searchParams.set("placeType", placeType);
+  url.searchParams.set("search", searchKeyword);
+
+  const response = await fetch(url, {
+    headers: {
+      "user-agent": "JJ-Campus-Copilot/1.0",
+      "x-requested-with": "XMLHttpRequest",
+    },
+    signal: AbortSignal.timeout(5000),
+  });
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const data = (await response.json()) as { items?: CampusPlace[] };
+
+  return data.items ?? [];
+}
+
 async function fetchTransportationSnapshot(): Promise<TransportationSnapshot | null> {
   const [locationLines, southTerminalLines] = await Promise.all([
     fetchOfficialPageLines(TRANSPORT_SOURCE_URL),
@@ -1192,6 +1347,78 @@ function dedupeSourceCards(cards: RagSourceCard[]) {
       card,
     ]),
   ).values()];
+}
+
+function dedupeCampusPlaces(places: CampusPlace[]) {
+  return [...new Map(
+    places.map((place) => [
+      place.id,
+      place,
+    ]),
+  ).values()];
+}
+
+function extractCampusPlaceKeyword(query: string) {
+  const normalized = normalizeWhitespace(query)
+    .replace(/전주대학교|전주대|학교|캠퍼스맵|건물리스트|건물번호|건물|공식|기준/gu, " ")
+    .replace(/위치|어디|어딘지|어디야|어디에|있어|있나요|있니|몇\s*번|몇번|번호/gu, " ")
+    .replace(/알려줘|알려주|찾아줘|찾아주|확인해줘|보여줘|가려면|가는\s*법|길찾기|이야|인가요|인가|이니|이냐/gu, " ")
+    .replace(/[?!.]/g, " ");
+
+  const compactKeyword = normalizeWhitespace(normalized)
+    .replace(/\s+/g, "")
+    .replace(/(?:으로부터|에게서|에서|으로|에게|한테|부터|까지|처럼|보다|의|를|을|은|는|이|가|에|로|도|만)+$/u, "");
+
+  return compactKeyword.length >= 2 ? compactKeyword : "";
+}
+
+function withTopicParticle(value: string) {
+  return `${value}${hasFinalConsonant(value) ? "은" : "는"}`;
+}
+
+function hasFinalConsonant(value: string) {
+  const lastChar = [...value].at(-1);
+
+  if (!lastChar) {
+    return false;
+  }
+
+  const charCode = lastChar.charCodeAt(0);
+  const hangulStart = 0xac00;
+  const hangulEnd = 0xd7a3;
+
+  if (charCode < hangulStart || charCode > hangulEnd) {
+    return false;
+  }
+
+  return (charCode - hangulStart) % 28 !== 0;
+}
+
+function normalizeCampusPlaceName(value: string) {
+  return normalizeWhitespace(value)
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function formatCampusPlaceType(placeType: CampusPlace["placeType"]) {
+  return {
+    BUILDING: "건물리스트",
+    WELFARE: "복지시설",
+    BUS: "버스정류장",
+  }[placeType];
+}
+
+function buildCampusDirectionUrl(place: CampusPlace) {
+  const url = new URL(CAMPUS_MAP_DIRECTION_URL);
+
+  url.searchParams.set("place_name", place.placeName);
+
+  if (place.latitude && place.longitude) {
+    url.searchParams.set("lat", String(place.latitude));
+    url.searchParams.set("lng", String(place.longitude));
+  }
+
+  return url.toString();
 }
 
 function findMenuByDate(menus: CafeteriaDayMenu[], date: string) {
