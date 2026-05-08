@@ -1360,7 +1360,7 @@ function dedupeCampusPlaces(places: CampusPlace[]) {
 
 function extractCampusPlaceKeyword(query: string) {
   const normalized = normalizeWhitespace(query)
-    .replace(/전주대학교|전주대|학교|캠퍼스맵|건물리스트|건물번호|건물|공식|기준/gu, " ")
+    .replace(/전주대학교|전주대|학교\s*내|학교내|교내|캠퍼스\s*내|캠퍼스내|캠퍼스맵|캠퍼스|학교|건물리스트|건물번호|건물|공식|기준/gu, " ")
     .replace(/위치|어디|어딘지|어디야|어디에|있어|있나요|있니|몇\s*번|몇번|번호/gu, " ")
     .replace(/알려줘|알려주|찾아줘|찾아주|확인해줘|보여줘|가려면|가는\s*법|길찾기|이야|인가요|인가|이니|이냐/gu, " ")
     .replace(/[?!.]/g, " ");
