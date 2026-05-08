@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { requestLmStudioEmbeddings } from "@/lib/lm-studio";
+import type { OfficialQuestionRoute } from "@/lib/question-router";
 
 const RAG_INDEX_PATH = path.join(process.cwd(), "data", "rag", "jj-official-index.json");
 const MAX_CHUNKS_PER_DOCUMENT = 2;
@@ -330,10 +331,22 @@ export async function retrieveOfficialContext(
 
 export async function tryBuildOfficialShortcutAnswer(
   retrievalQuery: string,
+  route?: OfficialQuestionRoute | null,
 ): Promise<RagShortcutAnswer | null> {
   const normalizedQuery = retrievalQuery.trim();
 
-  if (isCampusPlaceQuery(normalizedQuery)) {
+  if (route?.intent === "campus_place_lookup") {
+    const campusPlaceAnswer = await buildCampusPlaceAnswer(
+      normalizedQuery,
+      route.searchQuery ?? undefined,
+    );
+
+    if (campusPlaceAnswer) {
+      return campusPlaceAnswer;
+    }
+  }
+
+  if (!route && isCampusPlaceQuery(normalizedQuery)) {
     const campusPlaceAnswer = await buildCampusPlaceAnswer(normalizedQuery);
 
     if (campusPlaceAnswer) {
@@ -341,7 +354,7 @@ export async function tryBuildOfficialShortcutAnswer(
     }
   }
 
-  if (isTransportationAccessQuery(normalizedQuery)) {
+  if (route?.intent === "transport_lookup" || (!route && isTransportationAccessQuery(normalizedQuery))) {
     const transportationAnswer = await buildTransportationAnswer(normalizedQuery);
 
     if (transportationAnswer) {
@@ -351,7 +364,7 @@ export async function tryBuildOfficialShortcutAnswer(
 
   const index = await loadRagIndex();
 
-  if (isProfessorCountQuery(normalizedQuery)) {
+  if (route?.intent === "professor_lookup" && /(몇\s*명|몇명|총합|총원|인원|숫자|수는|수는\s*몇|얼마나)/u.test(normalizedQuery)) {
     if (!index?.chunks.length) {
       return null;
     }
@@ -359,7 +372,15 @@ export async function tryBuildOfficialShortcutAnswer(
     return buildProfessorCountAnswer(normalizedQuery, index);
   }
 
-  if (!isCafeteriaQuery(normalizedQuery)) {
+  if (!route && isProfessorCountQuery(normalizedQuery)) {
+    if (!index?.chunks.length) {
+      return null;
+    }
+
+    return buildProfessorCountAnswer(normalizedQuery, index);
+  }
+
+  if (route?.intent !== "cafeteria_lookup" && !isCafeteriaQuery(normalizedQuery)) {
     return null;
   }
 
@@ -376,7 +397,8 @@ export async function tryBuildOfficialShortcutAnswer(
     return null;
   }
 
-  const targetDate = resolveRequestedMenuDate(normalizedQuery);
+  const cafeteriaQuery = buildCafeteriaQuery(normalizedQuery, route);
+  const targetDate = resolveRequestedMenuDate(cafeteriaQuery);
   const targetDayMenu =
     findMenuByDate(liveMenus, targetDate.date) ??
     findMenuByDate(indexedMenus, targetDate.date) ??
@@ -438,7 +460,7 @@ export async function tryBuildOfficialShortcutAnswer(
     };
   }
 
-  const requestedMeal = resolveRequestedMeal(normalizedQuery);
+  const requestedMeal = route?.meal ?? resolveRequestedMeal(cafeteriaQuery);
   const meals = requestedMeal
     ? targetDayMenu.meals.filter((meal) => meal.name === requestedMeal)
     : targetDayMenu.meals;
@@ -924,8 +946,9 @@ function buildProfessorCountAnswer(
 
 async function buildCampusPlaceAnswer(
   retrievalQuery: string,
+  routedSearchQuery?: string,
 ): Promise<RagShortcutAnswer | null> {
-  const searchKeyword = extractCampusPlaceKeyword(retrievalQuery);
+  const searchKeyword = routedSearchQuery?.trim() || extractCampusPlaceKeyword(retrievalQuery);
 
   if (!searchKeyword) {
     return null;
@@ -1126,6 +1149,13 @@ function resolveRequestedMeal(query: string) {
   return null;
 }
 
+function buildCafeteriaQuery(query: string, route?: OfficialQuestionRoute | null) {
+  const datePart = route?.date ? ` ${route.date}` : "";
+  const mealPart = route?.meal ? ` ${route.meal}` : "";
+
+  return `${query}${datePart}${mealPart}`;
+}
+
 async function loadTransportationSnapshot() {
   if (
     transportCache &&
@@ -1165,8 +1195,9 @@ async function loadLiveCafeteriaMenus() {
 }
 
 async function loadCampusPlaces(searchKeyword: string) {
-  const normalizedKeyword = normalizeCampusPlaceName(searchKeyword);
-  const cached = campusPlaceCache.get(normalizedKeyword);
+  const searchKeywords = buildCampusSearchKeywords(searchKeyword);
+  const cacheKey = searchKeywords.map(normalizeCampusPlaceName).join("|");
+  const cached = campusPlaceCache.get(cacheKey);
 
   if (
     cached &&
@@ -1176,12 +1207,26 @@ async function loadCampusPlaces(searchKeyword: string) {
   }
 
   const placeTypes: CampusPlace["placeType"][] = ["BUILDING", "WELFARE", "BUS"];
-  const results = await Promise.all(
-    placeTypes.map((placeType) => fetchCampusPlaces(searchKeyword, placeType)),
-  );
-  const data = dedupeCampusPlaces(results.flat());
 
-  campusPlaceCache.set(normalizedKeyword, {
+  for (const keyword of searchKeywords) {
+    const results = await Promise.all(
+      placeTypes.map((placeType) => fetchCampusPlaces(keyword, placeType)),
+    );
+    const data = dedupeCampusPlaces(results.flat());
+
+    if (data.length) {
+      campusPlaceCache.set(cacheKey, {
+        fetchedAt: Date.now(),
+        data,
+      });
+
+      return data;
+    }
+  }
+
+  const data: CampusPlace[] = [];
+
+  campusPlaceCache.set(cacheKey, {
     fetchedAt: Date.now(),
     data,
   });
@@ -1359,6 +1404,26 @@ function dedupeCampusPlaces(places: CampusPlace[]) {
       place,
     ]),
   ).values()];
+}
+
+function buildCampusSearchKeywords(searchKeyword: string) {
+  const normalized = normalizeWhitespace(searchKeyword);
+  const compact = normalized.replace(/\s+/g, "");
+  const strippedGeneric = normalizeWhitespace(
+    normalized.replace(/(시설|설비|공간|장소|건물|위치)$/u, ""),
+  );
+  const candidates = [
+    normalized,
+    compact,
+    strippedGeneric,
+    strippedGeneric.replace(/\s+/g, ""),
+  ];
+
+  if (/변전|전력/u.test(normalized)) {
+    candidates.push("변전소", "변전");
+  }
+
+  return [...new Set(candidates.filter((candidate) => candidate.length >= 2))];
 }
 
 function extractCampusPlaceKeyword(query: string) {

@@ -50,6 +50,14 @@ interface LmStudioNativeChatResponse {
   response_id?: string;
 }
 
+interface RequestLmStudioTextOptions {
+  prompt: string;
+  systemPrompt: string;
+  temperature?: number;
+  maxTokens?: number;
+  timeoutMs?: number;
+}
+
 export function getLmStudioConfig() {
   const rawBaseUrl = process.env.LM_STUDIO_BASE_URL ?? fallbackBaseUrl;
 
@@ -64,6 +72,7 @@ export function getLmStudioConfig() {
     maxTokens: Number(process.env.LM_STUDIO_MAX_TOKENS ?? 1200),
     requestTimeoutMs: Number(process.env.LM_STUDIO_REQUEST_TIMEOUT_MS ?? 90_000),
     connectTimeoutMs: Number(process.env.LM_STUDIO_CONNECT_TIMEOUT_MS ?? 5_000),
+    routerTimeoutMs: Number(process.env.LM_STUDIO_ROUTER_TIMEOUT_MS ?? 10_000),
     apiKey: process.env.LM_STUDIO_API_KEY,
   };
 }
@@ -110,25 +119,11 @@ interface RequestLmStudioChatOptions {
   previousResponseId?: string;
 }
 
-export async function requestLmStudioChat({
-  prompt,
-  previousResponseId,
-}: RequestLmStudioChatOptions) {
+async function requestNativeChat(
+  payload: LmStudioNativeChatRequest,
+  timeoutMs: number,
+) {
   const config = getLmStudioConfig();
-  const payload: LmStudioNativeChatRequest = {
-    model: config.model,
-    input: prompt,
-    system_prompt: buildSystemPrompt(),
-    reasoning: "off",
-    temperature: config.temperature,
-    max_output_tokens: config.maxTokens,
-    ...(previousResponseId
-      ? {
-          previous_response_id: previousResponseId,
-        }
-      : {}),
-  };
-
   const response = await fetch(`${config.serverBaseUrl}/api/v1/chat`, {
     method: "POST",
     headers: {
@@ -140,7 +135,7 @@ export async function requestLmStudioChat({
         : {}),
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(config.requestTimeoutMs),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok) {
@@ -163,11 +158,61 @@ export async function requestLmStudioChat({
   }
 
   return {
+    data,
+    message,
+  };
+}
+
+export async function requestLmStudioChat({
+  prompt,
+  previousResponseId,
+}: RequestLmStudioChatOptions) {
+  const config = getLmStudioConfig();
+  const payload: LmStudioNativeChatRequest = {
+    model: config.model,
+    input: prompt,
+    system_prompt: buildSystemPrompt(),
+    reasoning: "off",
+    temperature: config.temperature,
+    max_output_tokens: config.maxTokens,
+    ...(previousResponseId
+      ? {
+          previous_response_id: previousResponseId,
+        }
+      : {}),
+  };
+  const { data, message } = await requestNativeChat(payload, config.requestTimeoutMs);
+
+  return {
     message,
     model: config.model,
     responseId: data.response_id,
     usage: data.stats,
   };
+}
+
+export async function requestLmStudioText({
+  prompt,
+  systemPrompt,
+  temperature = 0,
+  maxTokens = 400,
+  timeoutMs,
+}: RequestLmStudioTextOptions) {
+  const config = getLmStudioConfig();
+  const payload: LmStudioNativeChatRequest = {
+    model: config.model,
+    input: prompt,
+    system_prompt: systemPrompt,
+    reasoning: "off",
+    temperature,
+    max_output_tokens: maxTokens,
+  };
+  const { message } = await requestNativeChat(
+    payload,
+    timeoutMs ?? config.routerTimeoutMs,
+  );
+
+  return message;
 }
 
 interface RequestLmStudioEmbeddingsOptions {

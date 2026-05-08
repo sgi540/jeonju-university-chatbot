@@ -4,6 +4,7 @@ import {
   getLmStudioConfig,
   requestLmStudioChat,
 } from "@/lib/lm-studio";
+import { classifyOfficialQuestion } from "@/lib/question-router";
 import {
   buildGroundedPrompt,
   retrieveOfficialContext,
@@ -78,6 +79,17 @@ function formatChatError(error: unknown) {
   };
 }
 
+function buildRoutedRetrievalQuery(
+  fallbackQuery: string,
+  route: Awaited<ReturnType<typeof classifyOfficialQuestion>>,
+) {
+  if (!route?.searchQuery || route.confidence < 0.55) {
+    return fallbackQuery;
+  }
+
+  return route.searchQuery;
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
@@ -125,7 +137,31 @@ export async function POST(request: Request) {
 
     await assertLmStudioReachable();
 
-    const officialContext = await retrieveOfficialContext(retrievalQuery);
+    const questionRoute = await classifyOfficialQuestion(retrievalQuery).catch(() => null);
+    const routedShortcutAnswer = await tryBuildOfficialShortcutAnswer(
+      retrievalQuery,
+      questionRoute,
+    );
+
+    if (routedShortcutAnswer) {
+      return NextResponse.json({
+        message: routedShortcutAnswer.message,
+        model: "official-structured",
+        responseId: undefined,
+        usage: null,
+        sources: routedShortcutAnswer.sources,
+        rag: {
+          enabled: true,
+          retrievalQuery: routedShortcutAnswer.retrievalQuery,
+          indexSummary: routedShortcutAnswer.indexSummary,
+          router: questionRoute,
+        },
+      });
+    }
+
+    const officialContext = await retrieveOfficialContext(
+      buildRoutedRetrievalQuery(retrievalQuery, questionRoute),
+    );
     const groundedPrompt = buildGroundedPrompt(prompt, officialContext.groundedContext);
 
     const result = await requestLmStudioChat({
@@ -140,6 +176,7 @@ export async function POST(request: Request) {
         enabled: Boolean(officialContext.groundedContext),
         retrievalQuery: officialContext.retrievalQuery,
         indexSummary: officialContext.indexSummary,
+        router: questionRoute,
       },
     });
   } catch (error) {
