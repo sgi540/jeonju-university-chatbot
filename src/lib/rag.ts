@@ -7,9 +7,11 @@ const MAX_CHUNKS_PER_DOCUMENT = 2;
 const DEFAULT_RETRIEVAL_LIMIT = 5;
 const MIN_SIGNIFICANT_SCORE = 0.2;
 const MIN_RELEVANCE_RATIO = 0.75;
+const CAFETERIA_SOURCE_URL = "https://www.jj.ac.kr/jj/campuslife/food.do";
 const TRANSPORT_SOURCE_URL = "https://www.jj.ac.kr/jj/introduction/location.do";
 const SOUTH_TERMINAL_SOURCE_URL = "https://www.jj.ac.kr/jj/campuslife/southterminal-bus.do";
 const TRANSPORT_CACHE_TTL_MS = 1000 * 60 * 30;
+const CAFETERIA_CACHE_TTL_MS = 1000 * 60 * 5;
 const GENERIC_QUERY_TOKENS = new Set([
   "같은",
   "내용",
@@ -113,11 +115,19 @@ interface RagShortcutAnswer {
 interface CafeteriaDayMenu {
   weekday: string;
   date: string;
+  note?: string | null;
   meals: {
     name: "조식" | "중식" | "석식";
     hours: string | null;
     items: string[];
   }[];
+}
+
+interface ResolvedMenuDate {
+  date: string;
+  weekday: string;
+  label: string;
+  allowWeekdayFallback: boolean;
 }
 
 interface TransportationSnapshot {
@@ -141,6 +151,12 @@ let transportCache:
   | {
       fetchedAt: number;
       data: TransportationSnapshot | null;
+    }
+  | null = null;
+let cafeteriaCache:
+  | {
+      fetchedAt: number;
+      data: CafeteriaDayMenu[];
     }
   | null = null;
 
@@ -319,43 +335,73 @@ export async function tryBuildOfficialShortcutAnswer(
     return null;
   }
 
-  if (!index?.chunks.length) {
-    return null;
-  }
-
-  const cafeteriaChunks = index.chunks
-    .filter((chunk) => chunk.sourceId === "cafeteria")
+  const cafeteriaChunks = index?.chunks
+    ?.filter((chunk) => chunk.sourceId === "cafeteria")
     .sort((left, right) => compareChunkId(left.id, right.id));
+  const liveMenus = await loadLiveCafeteriaMenus();
+  const indexedMenus = cafeteriaChunks?.length
+    ? parseCafeteriaMenus(cafeteriaChunks)
+    : [];
+  const sourceMenus = liveMenus.length ? liveMenus : indexedMenus;
 
-  if (!cafeteriaChunks.length) {
+  if (!sourceMenus.length && !indexedMenus.length) {
     return null;
   }
 
-  const menus = parseCafeteriaMenus(cafeteriaChunks);
   const targetDate = resolveRequestedMenuDate(normalizedQuery);
   const targetDayMenu =
-    menus.find((menu) => menu.date === targetDate.date) ??
-    menus.find((menu) => menu.weekday === targetDate.weekday);
+    findMenuByDate(liveMenus, targetDate.date) ??
+    findMenuByDate(indexedMenus, targetDate.date) ??
+    (
+      targetDate.allowWeekdayFallback
+        ? findMenuByWeekday(sourceMenus, targetDate.weekday)
+        : null
+    );
 
-  const sourceUrl = normalizeSourceUrl(cafeteriaChunks[0].url);
+  const sourceUrl = normalizeSourceUrl(cafeteriaChunks?.[0]?.url ?? CAFETERIA_SOURCE_URL);
   const indexSummary = {
-    generatedAt: index.generatedAt,
-    documentCount: index.documentCount,
-    chunkCount: index.chunkCount,
+    generatedAt: index?.generatedAt ?? new Date().toISOString(),
+    documentCount: index?.documentCount ?? sourceMenus.length,
+    chunkCount: index?.chunkCount ?? sourceMenus.length,
   };
 
   if (!targetDayMenu) {
+    const availableRange = formatAvailableMenuRange(sourceMenus);
+
     return {
       message: [
         `전주대학교 식단조회 공식자료에서는 ${targetDate.label} 식단을 현재 확인하지 못했습니다.`,
-        `현재 확보된 식단 범위를 식단조회 페이지에서 다시 확인해 주세요.`,
+        availableRange ? `현재 공식 식단조회에서 확인되는 범위는 ${availableRange}입니다.` : null,
+        `식단조회 페이지에서 최신 등록 여부를 다시 확인해 주세요.`,
+      ].filter(isPresent).join(" "),
+      sources: [
+        {
+          title: "식단조회",
+          category: "생활",
+          url: sourceUrl,
+          excerpt: availableRange
+            ? `현재 확인 가능한 식단 범위: ${availableRange}`
+            : cafeteriaChunks?.[0]?.excerpt ?? "",
+          score: 1,
+        },
+      ],
+      retrievalQuery: normalizedQuery,
+      indexSummary,
+    };
+  }
+
+  if (!targetDayMenu.meals.length) {
+    return {
+      message: [
+        `전주대학교 ${targetDayMenu.date}(${targetDayMenu.weekday}) 식단은 공식자료에 등록된 식단정보가 없습니다.`,
+        `자세한 내용은 전주대학교 식단조회 공식 페이지를 확인해 주세요.`,
       ].join(" "),
       sources: [
         {
           title: "식단조회",
           category: "생활",
           url: sourceUrl,
-          excerpt: cafeteriaChunks[0].excerpt,
+          excerpt: targetDayMenu.note ?? "등록된 식단정보가 없습니다.",
           score: 1,
         },
       ],
@@ -603,44 +649,132 @@ function parseCafeteriaMenus(chunks: RagChunkRecord[]) {
     .split(/\n+/)
     .map((line) => normalizeWhitespace(line))
     .filter(Boolean);
-  const datePattern = /^([월화수목금토일]) \((\d{4}-\d{2}-\d{2})\)$/u;
-  const mealPattern = /^(조식|중식|석식) \(운영시간: ([^)]+)\)$/u;
-  const days: CafeteriaDayMenu[] = [];
-  const mealEntries: CafeteriaDayMenu["meals"] = [];
 
-  for (const line of lines) {
+  return parseCafeteriaMenuLines(lines);
+}
+
+function parseCafeteriaMenuLines(lines: string[]) {
+  const datePattern = /^([월화수목금토일]) \((\d{4}-\d{2}-\d{2})\)$/u;
+  const days: CafeteriaDayMenu[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     const dateMatch = line.match(datePattern);
 
     if (dateMatch) {
       days.push({
         weekday: dateMatch[1],
         date: dateMatch[2],
+        note: null,
         meals: [],
       });
-      continue;
     }
   }
 
-  for (let index = 0; index < lines.length; index += 1) {
+  if (!days.length) {
+    return [];
+  }
+
+  const blockMenus = parseCafeteriaBlocks(lines, days.length);
+
+  if (blockMenus.length) {
+    return days.map((day, index) => ({
+      ...day,
+      note: blockMenus[index]?.note ?? null,
+      meals: blockMenus[index]?.meals ?? [],
+    }));
+  }
+
+  const mealEntries = parseCafeteriaMealEntries(lines, 0);
+
+  return days.map((day, index) => ({
+    ...day,
+    meals: mealEntries.slice(index * 3, index * 3 + 3),
+  }));
+}
+
+function parseCafeteriaBlocks(lines: string[], dayCount: number) {
+  const datePattern = /^([월화수목금토일]) \((\d{4}-\d{2}-\d{2})\)$/u;
+  const lastDateIndex = lines.reduce(
+    (lastIndex, line, index) => datePattern.test(line) ? index : lastIndex,
+    -1,
+  );
+
+  if (lastDateIndex < 0) {
+    return [];
+  }
+
+  const blocks: string[][] = [];
+
+  for (let index = lastDateIndex + 1; index < lines.length; index += 1) {
+    if (lines[index] !== "전주대학교 내 식당 식단정보입니다.") {
+      continue;
+    }
+
+    const block: string[] = [];
+    let cursor = index + 1;
+
+    while (
+      cursor < lines.length &&
+      lines[cursor] !== "전주대학교 내 식당 식단정보입니다."
+    ) {
+      if (/^(기관\/부서|기관 · 부서|대학\/대학원)$/u.test(lines[cursor])) {
+        break;
+      }
+
+      block.push(lines[cursor]);
+      cursor += 1;
+    }
+
+    blocks.push(block);
+
+    if (blocks.length >= dayCount) {
+      break;
+    }
+  }
+
+  if (!blocks.length) {
+    return [];
+  }
+
+  return blocks.map((block) => ({
+    note: block.includes("등록된 식단정보가 없습니다.")
+      ? "등록된 식단정보가 없습니다."
+      : null,
+    meals: parseCafeteriaMealEntries(block, 0),
+  }));
+}
+
+function parseCafeteriaMealEntries(lines: string[], startIndex: number) {
+  const mealEntries: CafeteriaDayMenu["meals"] = [];
+
+  for (let index = startIndex; index < lines.length; index += 1) {
     const line = lines[index];
-    const mealMatch = line.match(mealPattern);
+    const mealMatch = matchCafeteriaMealLine(line);
 
     if (!mealMatch) {
       continue;
     }
 
     const items: string[] = [];
-    let cursor = index + 1;
+    const hoursFromNextLine = mealMatch.hours ? null : matchCafeteriaHoursLine(lines[index + 1]);
+    const hours = mealMatch.hours ?? hoursFromNextLine;
+    let cursor = hoursFromNextLine ? index + 2 : index + 1;
 
     while (cursor < lines.length) {
       const nextLine = lines[cursor];
 
-      if (datePattern.test(nextLine) || mealPattern.test(nextLine)) {
+      if (
+        /^([월화수목금토일]) \((\d{4}-\d{2}-\d{2})\)$/u.test(nextLine) ||
+        matchCafeteriaMealLine(nextLine) ||
+        nextLine === "전주대학교 내 식당 식단정보입니다."
+      ) {
         break;
       }
 
       if (
         nextLine !== "전주대학교 내 식당 식단정보입니다." &&
+        nextLine !== "등록된 식단정보가 없습니다." &&
         !nextLine.startsWith("운영업체 :")
       ) {
         items.push(nextLine);
@@ -650,17 +784,39 @@ function parseCafeteriaMenus(chunks: RagChunkRecord[]) {
     }
 
     mealEntries.push({
-      name: mealMatch[1] as "조식" | "중식" | "석식",
-      hours: mealMatch[2] ?? null,
+      name: mealMatch.name,
+      hours,
       items,
     });
   }
 
-  for (let dayIndex = 0; dayIndex < days.length; dayIndex += 1) {
-    days[dayIndex].meals = mealEntries.slice(dayIndex * 3, dayIndex * 3 + 3);
+  return mealEntries;
+}
+
+function matchCafeteriaMealLine(line: string) {
+  const inlineMatch = line.match(/^(조식|중식|석식) \(운영시간: ([^)]+)\)$/u);
+
+  if (inlineMatch) {
+    return {
+      name: inlineMatch[1] as "조식" | "중식" | "석식",
+      hours: inlineMatch[2],
+    };
   }
 
-  return days.filter((day) => day.meals.length);
+  const mealOnlyMatch = line.match(/^(조식|중식|석식)$/u);
+
+  if (mealOnlyMatch) {
+    return {
+      name: mealOnlyMatch[1] as "조식" | "중식" | "석식",
+      hours: null,
+    };
+  }
+
+  return null;
+}
+
+function matchCafeteriaHoursLine(line?: string) {
+  return line?.match(/^\(운영시간: ([^)]+)\)$/u)?.[1] ?? null;
 }
 
 function buildProfessorCountAnswer(
@@ -882,6 +1038,26 @@ async function loadTransportationSnapshot() {
   return data;
 }
 
+async function loadLiveCafeteriaMenus() {
+  if (
+    cafeteriaCache &&
+    Date.now() - cafeteriaCache.fetchedAt < CAFETERIA_CACHE_TTL_MS
+  ) {
+    return cafeteriaCache.data;
+  }
+
+  const data = await fetchOfficialPageLines(CAFETERIA_SOURCE_URL)
+    .then((lines) => parseCafeteriaMenuLines(lines))
+    .catch(() => []);
+
+  cafeteriaCache = {
+    fetchedAt: Date.now(),
+    data,
+  };
+
+  return data;
+}
+
 async function fetchTransportationSnapshot(): Promise<TransportationSnapshot | null> {
   const [locationLines, southTerminalLines] = await Promise.all([
     fetchOfficialPageLines(TRANSPORT_SOURCE_URL),
@@ -944,7 +1120,7 @@ async function fetchOfficialPageLines(url: string) {
       .replace(/<script[\s\S]*?<\/script>/giu, " ")
       .replace(/<style[\s\S]*?<\/style>/giu, " ")
       .replace(/<[^>]+>/g, "\n"),
-  );
+  ).replace(/<br\s*\/?>/giu, "\n");
 
   return text
     .split(/\n+/)
@@ -1018,27 +1194,54 @@ function dedupeSourceCards(cards: RagSourceCard[]) {
   ).values()];
 }
 
-function resolveRequestedMenuDate(query: string) {
+function findMenuByDate(menus: CafeteriaDayMenu[], date: string) {
+  return menus.find((menu) => menu.date === date) ?? null;
+}
+
+function findMenuByWeekday(menus: CafeteriaDayMenu[], weekday: string) {
+  return menus.find((menu) => menu.weekday === weekday) ?? null;
+}
+
+function formatAvailableMenuRange(menus: CafeteriaDayMenu[]) {
+  const dates = [...new Set(menus.map((menu) => menu.date))].sort();
+
+  if (!dates.length) {
+    return "";
+  }
+
+  if (dates.length === 1) {
+    return dates[0];
+  }
+
+  return `${dates[0]}~${dates[dates.length - 1]}`;
+}
+
+function resolveRequestedMenuDate(query: string): ResolvedMenuDate {
   const baseDate = getKoreanNow();
 
   if (/내일/u.test(query)) {
-    return buildResolvedDate(shiftDate(baseDate, 1));
+    return buildResolvedDate(shiftDate(baseDate, 1), "내일");
   }
 
   if (/모레/u.test(query)) {
-    return buildResolvedDate(shiftDate(baseDate, 2));
+    return buildResolvedDate(shiftDate(baseDate, 2), "모레");
   }
 
   if (/어제/u.test(query)) {
-    return buildResolvedDate(shiftDate(baseDate, -1));
+    return buildResolvedDate(shiftDate(baseDate, -1), "어제");
   }
 
-  const explicitDate =
-    query.match(/(\d{4})-(\d{2})-(\d{2})/) ??
-    query.match(/(\d{1,2})월\s*(\d{1,2})일/u);
+  const fullNumericDate = query.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+  const shortNumericDate = query.match(/(\d{1,2})[-./](\d{1,2})/);
+  const koreanDate = query.match(/(?:(\d{4})년\s*)?(\d{1,2})월\s*(\d{1,2})일/u);
+  const explicitDate = fullNumericDate ?? koreanDate ?? shortNumericDate;
 
   if (explicitDate) {
-    const year = explicitDate.length === 4 && explicitDate[0].includes("-")
+    const hasExplicitYear = explicitDate.length === 4 && (
+      explicitDate[0].includes("년") ||
+      /^\d{4}[-./]/u.test(explicitDate[0])
+    );
+    const year = hasExplicitYear
       ? Number(explicitDate[1])
       : baseDate.getUTCFullYear();
     const month = Number(explicitDate[explicitDate.length - 2]);
@@ -1054,7 +1257,7 @@ function resolveRequestedMenuDate(query: string) {
     const targetWeekdayIndex = weekdayToIndex(weekdayMatch[1]);
     const delta = targetWeekdayIndex - currentWeekdayIndex;
 
-    return buildResolvedDate(shiftDate(baseDate, delta));
+    return buildResolvedDate(shiftDate(baseDate, delta), `${weekdayMatch[1]}요일`, true);
   }
 
   return buildResolvedDate(baseDate, "오늘");
@@ -1082,17 +1285,20 @@ function shiftDate(date: Date, amount: number) {
   return shifted;
 }
 
-function buildResolvedDate(date: Date, label = "해당 날짜") {
+function buildResolvedDate(date: Date, label?: string, allowWeekdayFallback = false) {
   const isoDate = [
     date.getUTCFullYear(),
     String(date.getUTCMonth() + 1).padStart(2, "0"),
     String(date.getUTCDate()).padStart(2, "0"),
   ].join("-");
+  const weekday = ["일", "월", "화", "수", "목", "금", "토"][date.getUTCDay()];
+  const dateLabel = `${isoDate}(${weekday})`;
 
   return {
     date: isoDate,
-    weekday: ["일", "월", "화", "수", "목", "금", "토"][date.getUTCDay()],
-    label,
+    weekday,
+    label: label ? `${label} ${dateLabel}` : dateLabel,
+    allowWeekdayFallback,
   };
 }
 
