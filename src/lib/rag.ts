@@ -14,6 +14,7 @@ const MIN_SIGNIFICANT_SCORE = 0.2;
 const MIN_RELEVANCE_RATIO = 0.75;
 const CAFETERIA_SOURCE_URL = "https://www.jj.ac.kr/jj/campuslife/food.do";
 const COLLEGES_SOURCE_URL = "https://www.jj.ac.kr/jj/colleges/colleges-Introduction.do";
+const GRADUATE_SOURCE_URL = "https://www.jj.ac.kr/jj/colleges/graduate-info.do";
 const CAMPUS_MAP_SOURCE_URL = "https://www.jj.ac.kr/jj/introduction/campus-map.do";
 const CAMPUS_MAP_DIRECTION_URL = "https://www.jj.ac.kr/jj/introduction/campus-map-info.do";
 const TRANSPORT_SOURCE_URL = "https://www.jj.ac.kr/jj/introduction/location.do";
@@ -22,6 +23,7 @@ const TRANSPORT_CACHE_TTL_MS = 1000 * 60 * 30;
 const CAFETERIA_CACHE_TTL_MS = 1000 * 60 * 5;
 const CAMPUS_PLACE_CACHE_TTL_MS = 1000 * 60 * 30;
 const DEPARTMENT_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+const GRADUATE_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
 const OFFICIAL_COLLEGE_ORDER = [
   "인문콘텐츠대학",
   "사회과학대학",
@@ -184,6 +186,17 @@ interface DepartmentSnapshot {
   totalDepartments: number;
 }
 
+interface GraduateSchool {
+  name: string;
+  url?: string | null;
+  location?: string | null;
+  phone?: string | null;
+}
+
+interface GraduateSchoolSnapshot {
+  schools: GraduateSchool[];
+}
+
 interface CampusPlace {
   id: number;
   placeName: string;
@@ -212,6 +225,12 @@ let departmentCache:
   | {
       fetchedAt: number;
       data: DepartmentSnapshot | null;
+    }
+  | null = null;
+let graduateSchoolCache:
+  | {
+      fetchedAt: number;
+      data: GraduateSchoolSnapshot | null;
     }
   | null = null;
 const campusPlaceCache = new Map<
@@ -377,6 +396,14 @@ export async function tryBuildOfficialShortcutAnswer(
   route?: OfficialQuestionRoute | null,
 ): Promise<RagShortcutAnswer | null> {
   const normalizedQuery = retrievalQuery.trim();
+
+  if (route?.intent === "graduate_school_lookup" || (!route && isGraduateSchoolQuery(normalizedQuery))) {
+    const graduateSchoolAnswer = await buildGraduateSchoolAnswer(normalizedQuery);
+
+    if (graduateSchoolAnswer) {
+      return graduateSchoolAnswer;
+    }
+  }
 
   if (route?.intent === "department_lookup" || (!route && isDepartmentListQuery(normalizedQuery))) {
     const departmentListAnswer = await buildDepartmentListAnswer(normalizedQuery);
@@ -736,10 +763,19 @@ function isProfessorCountQuery(query: string) {
   return /(교수|교수님|교수진|교원)/u.test(query) && /(몇\s*명|몇명|총합|총원|인원|숫자|수는|수는\s*몇|얼마나)/u.test(query);
 }
 
+function isGraduateSchoolQuery(query: string) {
+  const normalized = normalizeWhitespace(query);
+
+  return (
+    /대학원/u.test(normalized) &&
+    /(있어|있나요|있니|있습니까|있는지|종류|목록|리스트|입학|모집|지원|홈페이지|어디|알려|안내)/u.test(normalized)
+  );
+}
+
 function isDepartmentListQuery(query: string) {
   const normalized = normalizeWhitespace(query);
 
-  if (/(교수|교수님|교수진|교원|연구실|전화|이메일)/u.test(normalized)) {
+  if (/(대학원|교수|교수님|교수진|교원|연구실|전화|이메일)/u.test(normalized)) {
     return false;
   }
 
@@ -953,6 +989,127 @@ function matchCafeteriaMealLine(line: string) {
 
 function matchCafeteriaHoursLine(line?: string) {
   return line?.match(/^\(운영시간: ([^)]+)\)$/u)?.[1] ?? null;
+}
+
+async function buildGraduateSchoolAnswer(
+  retrievalQuery: string,
+): Promise<RagShortcutAnswer | null> {
+  const snapshot = await loadGraduateSchoolSnapshot();
+
+  if (!snapshot?.schools.length) {
+    return null;
+  }
+
+  const index = await loadRagIndex();
+  const schoolNames = snapshot.schools.map((school) => school.name);
+  const detailLines = snapshot.schools.map((school) => {
+    const detail = [
+      school.location ? `위치 ${school.location}` : null,
+      school.phone ? `문의 ${school.phone}` : null,
+    ].filter(isPresent).join(", ");
+
+    return detail ? `- ${school.name}: ${detail}` : `- ${school.name}`;
+  });
+
+  return {
+    message: [
+      `네. 전주대학교에는 대학원이 있습니다.`,
+      `공식 대학원안내 페이지 기준으로 ${snapshot.schools.length}개 대학원이 확인됩니다: ${schoolNames.join(", ")}.`,
+      ...detailLines,
+      "대학원 입학요강과 세부 전공은 전주대학교 대학원 홈페이지 또는 공식 대학원안내 페이지에서 확인해 주세요.",
+    ].join("\n"),
+    sources: [
+      {
+        title: "대학원안내",
+        category: "대학원",
+        url: GRADUATE_SOURCE_URL,
+        excerpt: `${snapshot.schools.length}개 대학원: ${schoolNames.join(", ")}`,
+        score: 1,
+      },
+      ...snapshot.schools.slice(0, 4).map((school) => ({
+        title: school.name,
+        category: "대학원",
+        url: school.url ?? GRADUATE_SOURCE_URL,
+        excerpt: [
+          school.location ? `위치 ${school.location}` : null,
+          school.phone ? `문의 ${school.phone}` : null,
+        ].filter(isPresent).join(", ") || school.name,
+        score: 0.98,
+      })),
+    ],
+    retrievalQuery,
+    indexSummary: index
+      ? {
+          generatedAt: index.generatedAt,
+          documentCount: index.documentCount,
+          chunkCount: index.chunkCount,
+        }
+      : null,
+  };
+}
+
+async function loadGraduateSchoolSnapshot() {
+  if (
+    graduateSchoolCache &&
+    Date.now() - graduateSchoolCache.fetchedAt < GRADUATE_CACHE_TTL_MS
+  ) {
+    return graduateSchoolCache.data;
+  }
+
+  const data = await fetchGraduateSchoolSnapshot().catch(() => null);
+
+  graduateSchoolCache = {
+    fetchedAt: Date.now(),
+    data,
+  };
+
+  return data;
+}
+
+async function fetchGraduateSchoolSnapshot(): Promise<GraduateSchoolSnapshot | null> {
+  const response = await fetch(GRADUATE_SOURCE_URL, {
+    headers: {
+      "user-agent": "JJ-Campus-Copilot/1.0",
+    },
+    signal: AbortSignal.timeout(7000),
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const html = await response.text();
+  const $ = load(html);
+  const schools = $(".introduce-con").toArray()
+    .map((element) => {
+      const name = normalizeWhitespace(
+        $(element).find(".introduce-title").first().text(),
+      );
+      const url = normalizeOptionalUrl(
+        $(element).find(".introduce-btn-box a").first().attr("href"),
+        GRADUATE_SOURCE_URL,
+      );
+      const contactLines = $(element).find(".introduce-contact li").toArray()
+        .map((item) => normalizeWhitespace($(item).text()));
+
+      return {
+        name,
+        url,
+        location: extractContactValue(contactLines, "L."),
+        phone: extractContactValue(contactLines, "T."),
+      };
+    })
+    .filter((school) => /대학원$/u.test(school.name));
+
+  const dedupedSchools = [...new Map(
+    schools.map((school) => [school.name, school]),
+  ).values()];
+
+  return dedupedSchools.length
+    ? {
+        schools: dedupedSchools,
+      }
+    : null;
 }
 
 async function buildDepartmentListAnswer(
@@ -1183,6 +1340,18 @@ function normalizeOptionalUrl(value: string | null | undefined, baseUrl: string)
   } catch {
     return null;
   }
+}
+
+function extractContactValue(lines: string[], label: string) {
+  const line = lines.find((candidate) => candidate.startsWith(label));
+
+  if (!line) {
+    return null;
+  }
+
+  const normalized = normalizeWhitespace(line.replace(label, ""));
+
+  return normalized || null;
 }
 
 function dedupeStrings(values: string[]) {

@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "check:intents": "node scripts/check-chat-intents.mjs",
     "rag:build": "node scripts/build-rag-index.mjs"
   },
   "dependencies": {
