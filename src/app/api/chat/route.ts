@@ -118,7 +118,7 @@ export async function POST(request: Request) {
     }
 
     const retrievalQuery = buildRetrievalQuery(prompt, rawMessages);
-    const shortcutAnswer = await tryBuildOfficialShortcutAnswer(retrievalQuery);
+    const shortcutAnswer = await tryBuildOfficialShortcutAnswer(prompt);
 
     if (shortcutAnswer) {
       return NextResponse.json({
@@ -137,9 +137,9 @@ export async function POST(request: Request) {
 
     await assertLmStudioReachable();
 
-    const questionRoute = await classifyOfficialQuestion(retrievalQuery).catch(() => null);
+    const questionRoute = await classifyOfficialQuestion(prompt).catch(() => null);
     const routedShortcutAnswer = await tryBuildOfficialShortcutAnswer(
-      retrievalQuery,
+      prompt,
       questionRoute,
     );
 
