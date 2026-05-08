@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import {
   assertLmStudioReachable,
   getLmStudioConfig,
+  normalizeLmStudioBaseUrl,
   requestLmStudioChat,
+  type LmStudioRuntimeOverrides,
 } from "@/lib/lm-studio";
 import { classifyOfficialQuestion } from "@/lib/question-router";
 import {
@@ -17,6 +19,15 @@ export const dynamic = "force-dynamic";
 interface IncomingMessage {
   role: "assistant" | "user";
   content: string;
+}
+
+class ChatRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status = 400) {
+    super(message);
+    this.status = status;
+  }
 }
 
 function isIncomingMessage(value: unknown): value is IncomingMessage {
@@ -55,7 +66,33 @@ function isLmStudioConnectionError(message: string) {
   return /(fetch failed|timeout|timed out|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|Failed to connect)/iu.test(message);
 }
 
-function formatChatError(error: unknown) {
+function parseLmStudioConfigOverrides(endpoint: unknown): LmStudioRuntimeOverrides {
+  if (typeof endpoint !== "string" || endpoint.trim().length === 0) {
+    return {};
+  }
+
+  try {
+    return {
+      baseUrl: normalizeLmStudioBaseUrl(endpoint),
+    };
+  } catch {
+    throw new ChatRequestError(
+      "LM Studio 엔드포인트 형식이 올바르지 않습니다. 예: http://192.168.4.187:1234",
+    );
+  }
+}
+
+function formatChatError(
+  error: unknown,
+  configOverrides: LmStudioRuntimeOverrides = {},
+) {
+  if (error instanceof ChatRequestError) {
+    return {
+      status: error.status,
+      details: error.message,
+    };
+  }
+
   const rawMessage =
     error instanceof Error
       ? error.message
@@ -68,7 +105,7 @@ function formatChatError(error: unknown) {
     };
   }
 
-  const config = getLmStudioConfig();
+  const config = getLmStudioConfig(configOverrides);
 
   return {
     status: 503,
@@ -91,12 +128,16 @@ function buildRoutedRetrievalQuery(
 }
 
 export async function POST(request: Request) {
+  let configOverrides: LmStudioRuntimeOverrides = {};
+
   try {
     const body = (await request.json()) as {
+      lmStudioEndpoint?: unknown;
       prompt?: unknown;
       previousResponseId?: unknown;
       messages?: unknown;
     };
+    configOverrides = parseLmStudioConfigOverrides(body.lmStudioEndpoint);
     const rawMessages = Array.isArray(body.messages)
       ? body.messages.filter(isIncomingMessage)
       : [];
@@ -135,9 +176,12 @@ export async function POST(request: Request) {
       });
     }
 
-    await assertLmStudioReachable();
+    await assertLmStudioReachable(configOverrides);
 
-    const questionRoute = await classifyOfficialQuestion(prompt).catch(() => null);
+    const questionRoute = await classifyOfficialQuestion(
+      prompt,
+      configOverrides,
+    ).catch(() => null);
     const routedShortcutAnswer = await tryBuildOfficialShortcutAnswer(
       prompt,
       questionRoute,
@@ -161,12 +205,15 @@ export async function POST(request: Request) {
 
     const officialContext = await retrieveOfficialContext(
       buildRoutedRetrievalQuery(retrievalQuery, questionRoute),
+      undefined,
+      configOverrides,
     );
     const groundedPrompt = buildGroundedPrompt(prompt, officialContext.groundedContext);
 
     const result = await requestLmStudioChat({
       prompt: groundedPrompt,
       previousResponseId,
+      configOverrides,
     });
 
     return NextResponse.json({
@@ -180,7 +227,7 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    const { status, details } = formatChatError(error);
+    const { status, details } = formatChatError(error, configOverrides);
 
     return NextResponse.json(
       {

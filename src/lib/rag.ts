@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { requestLmStudioEmbeddings } from "@/lib/lm-studio";
+import {
+  requestLmStudioEmbeddings,
+  type LmStudioRuntimeOverrides,
+} from "@/lib/lm-studio";
 import type { OfficialQuestionRoute } from "@/lib/question-router";
 
 const RAG_INDEX_PATH = path.join(process.cwd(), "data", "rag", "jj-official-index.json");
@@ -186,6 +189,7 @@ const campusPlaceCache = new Map<
 export async function retrieveOfficialContext(
   retrievalQuery: string,
   limit = DEFAULT_RETRIEVAL_LIMIT,
+  configOverrides: LmStudioRuntimeOverrides = {},
 ): Promise<RagSearchResult> {
   const normalizedQuery = retrievalQuery.trim();
 
@@ -211,6 +215,7 @@ export async function retrieveOfficialContext(
 
   const [queryEmbedding] = await requestLmStudioEmbeddings(normalizedQuery, {
     model: index.embeddingModel,
+    configOverrides,
   });
   const queryTokens = tokenize(normalizedQuery);
   const sourceMap = new Map((index.sources ?? []).map((source) => [source.id, source]));

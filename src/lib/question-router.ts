@@ -1,4 +1,7 @@
-import { requestLmStudioText } from "@/lib/lm-studio";
+import {
+  requestLmStudioText,
+  type LmStudioRuntimeOverrides,
+} from "@/lib/lm-studio";
 
 export type OfficialQuestionIntent =
   | "campus_place_lookup"
@@ -28,12 +31,14 @@ const VALID_MEALS = new Set(["조식", "중식", "석식"]);
 
 export async function classifyOfficialQuestion(
   question: string,
+  configOverrides: LmStudioRuntimeOverrides = {},
 ): Promise<OfficialQuestionRoute | null> {
   const content = await requestLmStudioText({
     prompt: buildRouterPrompt(question),
     systemPrompt: buildRouterSystemPrompt(),
     temperature: 0,
     maxTokens: 360,
+    configOverrides,
   });
 
   return parseRouterResponse(content);

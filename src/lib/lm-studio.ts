@@ -1,14 +1,41 @@
 const fallbackBaseUrl = "http://127.0.0.1:1234/v1";
 const fallbackModel = "qwen3-35b";
 
+export interface LmStudioRuntimeOverrides {
+  baseUrl?: string;
+}
+
+export function normalizeLmStudioBaseUrl(rawBaseUrl: string) {
+  const trimmed = rawBaseUrl.trim();
+
+  if (!trimmed) {
+    throw new Error("LM Studio endpoint is empty.");
+  }
+
+  const withProtocol = /^https?:\/\//iu.test(trimmed)
+    ? trimmed
+    : `http://${trimmed}`;
+  const url = new URL(withProtocol);
+
+  if (!url.hostname) {
+    throw new Error("LM Studio endpoint host is empty.");
+  }
+
+  const pathname = url.pathname === "/"
+    ? ""
+    : url.pathname.replace(/\/+$/u, "");
+
+  return `${url.protocol}//${url.host}${pathname}`;
+}
+
 function normalizeOpenAiBaseUrl(rawBaseUrl: string) {
-  const trimmed = rawBaseUrl.replace(/\/$/, "");
+  const trimmed = normalizeLmStudioBaseUrl(rawBaseUrl);
 
   return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
 }
 
 function normalizeServerBaseUrl(rawBaseUrl: string) {
-  return rawBaseUrl.replace(/\/$/, "").replace(/\/v1$/, "");
+  return normalizeLmStudioBaseUrl(rawBaseUrl).replace(/\/v1$/u, "");
 }
 
 interface LmStudioNativeChatRequest {
@@ -56,10 +83,12 @@ interface RequestLmStudioTextOptions {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  configOverrides?: LmStudioRuntimeOverrides;
 }
 
-export function getLmStudioConfig() {
-  const rawBaseUrl = process.env.LM_STUDIO_BASE_URL ?? fallbackBaseUrl;
+export function getLmStudioConfig(overrides: LmStudioRuntimeOverrides = {}) {
+  const rawBaseUrl =
+    overrides.baseUrl ?? process.env.LM_STUDIO_BASE_URL ?? fallbackBaseUrl;
 
   return {
     openAiBaseUrl: normalizeOpenAiBaseUrl(rawBaseUrl),
@@ -90,8 +119,10 @@ export function buildSystemPrompt() {
   ].join(" ");
 }
 
-export async function assertLmStudioReachable() {
-  const config = getLmStudioConfig();
+export async function assertLmStudioReachable(
+  overrides: LmStudioRuntimeOverrides = {},
+) {
+  const config = getLmStudioConfig(overrides);
   const response = await fetch(`${config.openAiBaseUrl}/models`, {
     headers: {
       ...(config.apiKey
@@ -117,13 +148,15 @@ export async function assertLmStudioReachable() {
 interface RequestLmStudioChatOptions {
   prompt: string;
   previousResponseId?: string;
+  configOverrides?: LmStudioRuntimeOverrides;
 }
 
 async function requestNativeChat(
   payload: LmStudioNativeChatRequest,
   timeoutMs: number,
+  overrides: LmStudioRuntimeOverrides = {},
 ) {
-  const config = getLmStudioConfig();
+  const config = getLmStudioConfig(overrides);
   const response = await fetch(`${config.serverBaseUrl}/api/v1/chat`, {
     method: "POST",
     headers: {
@@ -166,8 +199,9 @@ async function requestNativeChat(
 export async function requestLmStudioChat({
   prompt,
   previousResponseId,
+  configOverrides = {},
 }: RequestLmStudioChatOptions) {
-  const config = getLmStudioConfig();
+  const config = getLmStudioConfig(configOverrides);
   const payload: LmStudioNativeChatRequest = {
     model: config.model,
     input: prompt,
@@ -181,7 +215,11 @@ export async function requestLmStudioChat({
         }
       : {}),
   };
-  const { data, message } = await requestNativeChat(payload, config.requestTimeoutMs);
+  const { data, message } = await requestNativeChat(
+    payload,
+    config.requestTimeoutMs,
+    configOverrides,
+  );
 
   return {
     message,
@@ -197,8 +235,9 @@ export async function requestLmStudioText({
   temperature = 0,
   maxTokens = 400,
   timeoutMs,
+  configOverrides = {},
 }: RequestLmStudioTextOptions) {
-  const config = getLmStudioConfig();
+  const config = getLmStudioConfig(configOverrides);
   const payload: LmStudioNativeChatRequest = {
     model: config.model,
     input: prompt,
@@ -210,6 +249,7 @@ export async function requestLmStudioText({
   const { message } = await requestNativeChat(
     payload,
     timeoutMs ?? config.routerTimeoutMs,
+    configOverrides,
   );
 
   return message;
@@ -217,13 +257,14 @@ export async function requestLmStudioText({
 
 interface RequestLmStudioEmbeddingsOptions {
   model?: string;
+  configOverrides?: LmStudioRuntimeOverrides;
 }
 
 export async function requestLmStudioEmbeddings(
   input: string | string[],
   options: RequestLmStudioEmbeddingsOptions = {},
 ) {
-  const config = getLmStudioConfig();
+  const config = getLmStudioConfig(options.configOverrides);
   const payload: LmStudioEmbeddingRequest = {
     model: options.model ?? config.embeddingModel,
     input,

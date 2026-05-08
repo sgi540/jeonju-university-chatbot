@@ -55,12 +55,41 @@ const initialMessages = [
   ),
 ];
 
+const endpointStorageKey = "jj-campus-copilot-lm-studio-endpoint";
+
+function normalizeEndpointInput(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    throw new Error("엔드포인트를 입력해 주세요.");
+  }
+
+  const withProtocol = /^https?:\/\//iu.test(trimmed)
+    ? trimmed
+    : `http://${trimmed}`;
+  const url = new URL(withProtocol);
+
+  if (!url.hostname) {
+    throw new Error("엔드포인트 호스트를 입력해 주세요.");
+  }
+
+  const pathname = url.pathname === "/"
+    ? ""
+    : url.pathname.replace(/\/+$/u, "");
+
+  return `${url.protocol}//${url.host}${pathname}`.replace(/\/v1$/u, "");
+}
+
 export function ChatShell() {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastModel, setLastModel] = useState(modelLabel);
+  const [endpointDraft, setEndpointDraft] = useState(endpointLabel);
+  const [appliedEndpoint, setAppliedEndpoint] = useState(endpointLabel);
+  const [endpointFeedback, setEndpointFeedback] = useState<string | null>(null);
+  const [endpointError, setEndpointError] = useState<string | null>(null);
   const [ragMeta, setRagMeta] = useState<ChatApiResponse["rag"] | null>(null);
   const [previousResponseId, setPreviousResponseId] = useState<string | null>(
     null,
@@ -73,6 +102,27 @@ export function ChatShell() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const savedEndpoint = window.localStorage.getItem(endpointStorageKey);
+
+      if (!savedEndpoint) {
+        return;
+      }
+
+      try {
+        const normalizedEndpoint = normalizeEndpointInput(savedEndpoint);
+
+        setEndpointDraft(normalizedEndpoint);
+        setAppliedEndpoint(normalizedEndpoint);
+      } catch {
+        window.localStorage.removeItem(endpointStorageKey);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, []);
 
   async function submitPrompt(prompt: string) {
     const trimmedPrompt = prompt.trim();
@@ -96,6 +146,7 @@ export function ChatShell() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          lmStudioEndpoint: appliedEndpoint,
           prompt: trimmedPrompt,
           messages: nextMessages.map(({ role, content }) => ({ role, content })),
           previousResponseId,
@@ -127,6 +178,30 @@ export function ChatShell() {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  function handleEndpointSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      const normalizedEndpoint = normalizeEndpointInput(endpointDraft);
+
+      setAppliedEndpoint(normalizedEndpoint);
+      setEndpointDraft(normalizedEndpoint);
+      setEndpointError(null);
+      setEndpointFeedback("적용 완료. 다음 질문부터 이 주소를 사용합니다.");
+      setPreviousResponseId(null);
+      window.localStorage.setItem(endpointStorageKey, normalizedEndpoint);
+    } catch {
+      setEndpointFeedback(null);
+      setEndpointError("예: http://192.168.4.187:1234 형식으로 입력해 주세요.");
+    }
+  }
+
+  function handleEndpointChange(event: ChangeEvent<HTMLInputElement>) {
+    setEndpointDraft(event.target.value);
+    setEndpointError(null);
+    setEndpointFeedback(null);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -272,12 +347,49 @@ export function ChatShell() {
               </div>
             </div>
             <div className="space-y-3 text-sm text-[var(--muted)]">
-              <div className="flex items-start justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/70 px-3 py-3">
-                <span>엔드포인트</span>
-                <span className="text-right font-medium text-[var(--foreground)]">
-                  {endpointLabel}
-                </span>
-              </div>
+              <form
+                onSubmit={handleEndpointSubmit}
+                className="rounded-2xl border border-[var(--line)] bg-white/70 px-3 py-3"
+              >
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <label
+                    htmlFor="lm-studio-endpoint"
+                    className="font-medium text-[var(--foreground)]"
+                  >
+                    엔드포인트
+                  </label>
+                  <span className="rounded-full bg-[rgba(31,91,89,0.1)] px-2.5 py-1 text-[0.68rem] font-semibold text-[var(--teal)]">
+                    적용 중
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    id="lm-studio-endpoint"
+                    type="text"
+                    value={endpointDraft}
+                    onChange={handleEndpointChange}
+                    placeholder="http://192.168.4.187:1234"
+                    className="min-w-0 flex-1 rounded-xl border border-[var(--line)] bg-white px-3 py-2 text-sm font-medium text-[var(--foreground)] outline-none transition-colors duration-200 placeholder:text-[var(--muted)] focus:border-[var(--line-strong)]"
+                  />
+                  <button
+                    type="submit"
+                    className="rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-transform duration-200 hover:-translate-y-0.5"
+                  >
+                    완료
+                  </button>
+                </div>
+                <p
+                  className={`mt-2 text-xs leading-5 ${
+                    endpointError
+                      ? "text-[var(--primary)]"
+                      : "text-[var(--muted)]"
+                  }`}
+                >
+                  {endpointError ??
+                    endpointFeedback ??
+                    `현재 ${appliedEndpoint}로 요청합니다.`}
+                </p>
+              </form>
               <div className="flex items-start justify-between gap-4 rounded-2xl border border-[var(--line)] bg-white/70 px-3 py-3">
                 <span>기본 모델 라벨</span>
                 <span className="text-right font-medium text-[var(--foreground)]">
