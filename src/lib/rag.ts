@@ -659,7 +659,7 @@ function isCampusPlaceQuery(query: string) {
     return false;
   }
 
-  return /(위치|어디|건물|몇\s*번|캠퍼스맵|길찾기)/u.test(normalized);
+  return /(위치|어디|건물|몇\s*번|캠퍼스맵|길찾기|있어|있나요|있니|있습니까|있는지|있을까)/u.test(normalized);
 }
 
 function isTransportationAccessQuery(query: string) {
@@ -950,10 +950,13 @@ async function buildCampusPlaceAnswer(
   const descriptionLine = exactPlace.description
     ? `캠퍼스맵 설명: ${normalizeWhitespace(exactPlace.description)}`
     : "다만 공식 캠퍼스맵에는 별도 상세 설명은 등록되어 있지 않습니다.";
+  const openingLine = isCampusPlaceExistenceQuestion(retrievalQuery)
+    ? `네. 전주대학교 공식 캠퍼스맵 기준으로 ${withTopicParticle(exactPlace.placeName)} ${formatCampusPlaceType(exactPlace.placeType)} ${exactPlace.orderNo}번으로 등록되어 있습니다.`
+    : `전주대학교 공식 캠퍼스맵 기준으로 ${withTopicParticle(exactPlace.placeName)} ${formatCampusPlaceType(exactPlace.placeType)} ${exactPlace.orderNo}번으로 등록되어 있습니다.`;
 
   return {
     message: [
-      `전주대학교 공식 캠퍼스맵 기준으로 ${withTopicParticle(exactPlace.placeName)} ${formatCampusPlaceType(exactPlace.placeType)} ${exactPlace.orderNo}번으로 등록되어 있습니다.`,
+      openingLine,
       coordinateLine,
       descriptionLine,
       `정확한 위치는 전주대학교 캠퍼스맵 또는 길찾기 화면에서 확인해 주세요.`,
@@ -1360,7 +1363,7 @@ function dedupeCampusPlaces(places: CampusPlace[]) {
 
 function extractCampusPlaceKeyword(query: string) {
   const normalized = normalizeWhitespace(query)
-    .replace(/전주대학교|전주대|학교\s*내|학교내|교내|캠퍼스\s*내|캠퍼스내|캠퍼스맵|캠퍼스|학교|건물리스트|건물번호|건물|공식|기준/gu, " ")
+    .replace(/전주대학교|전주대|학교\s*안에?|학교안에?|학교\s*내|학교내|교내|캠퍼스\s*안에?|캠퍼스안에?|캠퍼스\s*내|캠퍼스내|캠퍼스맵|캠퍼스|학교|안에|안쪽|내부|건물리스트|건물번호|건물|공식|기준/gu, " ")
     .replace(/위치|어디|어딘지|어디야|어디에|있어|있나요|있니|몇\s*번|몇번|번호/gu, " ")
     .replace(/알려줘|알려주|찾아줘|찾아주|확인해줘|보여줘|가려면|가는\s*법|길찾기|이야|인가요|인가|이니|이냐/gu, " ")
     .replace(/[?!.]/g, " ");
@@ -1374,6 +1377,10 @@ function extractCampusPlaceKeyword(query: string) {
 
 function withTopicParticle(value: string) {
   return `${value}${hasFinalConsonant(value) ? "은" : "는"}`;
+}
+
+function isCampusPlaceExistenceQuestion(query: string) {
+  return /(있어|있나요|있니|있습니까|있는지|있을까)/u.test(query);
 }
 
 function hasFinalConsonant(value: string) {
