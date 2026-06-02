@@ -40,6 +40,8 @@ npm run rag:build
 ## Switching Computers Safely
 
 권장 방식은 Private Git 저장소를 만들고 MacBook에서 `push`, Mac Studio에서 `pull`하는 것입니다.
+현재 기준 저장소는 `https://github.com/sgi540/jeonju-university-chatbot.git`입니다.
+자세한 Git/GitHub 운영 절차는 `docs/git-github-operations.md`를 참고합니다.
 
 Git에 포함할 것:
 - `src`
@@ -65,4 +67,3 @@ Git에 포함하지 않을 것:
 ```bash
 npm run rag:build
 ```
-

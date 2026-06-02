@@ -68,6 +68,7 @@ NEXT_PUBLIC_LM_STUDIO_ENDPOINT_LABEL=127.0.0.1:1234
 - 채팅 요청은 `src/app/api/chat/route.ts`에서 LM Studio로 전달됩니다.
 - 공식문서 RAG 소스 목록은 `rag/source-manifest.json`에서 관리합니다.
 - 공식문서 RAG 인덱스는 `npm run rag:build`로 생성하며 `data/rag/jj-official-index.json`에 저장됩니다.
+- Git/GitHub 기반 장비 간 작업과 서버 운영 절차는 `docs/git-github-operations.md`를 참고합니다.
 
 ## Useful Commands
 
@@ -75,6 +76,7 @@ NEXT_PUBLIC_LM_STUDIO_ENDPOINT_LABEL=127.0.0.1:1234
 npm run dev
 npm run lint
 npm run typecheck
+npm run check:intents
 npm run build
 npm run rag:build
 ```
